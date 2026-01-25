@@ -402,7 +402,7 @@ func (m *Model) initEditFields() {
 }
 
 func (m *Model) initBatchFields() {
-	m.batchFields = make([]textinput.Model, 4)
+	m.batchFields = make([]textinput.Model, 5)
 
 	m.batchFields[0] = textinput.New()
 	m.batchFields[0].Placeholder = "Author name (empty = keep original)"
@@ -424,6 +424,11 @@ func (m *Model) initBatchFields() {
 	m.batchFields[3].Placeholder = "Message (empty = keep original)"
 	m.batchFields[3].SetValue("")
 	m.batchFields[3].Width = 60
+
+	m.batchFields[4] = textinput.New()
+	m.batchFields[4].Placeholder = "Time spread: +1h, -30m (weighted distribution)"
+	m.batchFields[4].SetValue("")
+	m.batchFields[4].Width = 40
 
 	m.batchFocus = 0
 }
@@ -507,13 +512,13 @@ func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Tab):
 			m.batchFields[m.batchFocus].Blur()
-			m.batchFocus = (m.batchFocus + 1) % 4
+			m.batchFocus = (m.batchFocus + 1) % 5
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
 
 		case key.Matches(msg, m.keys.ShiftTab):
 			m.batchFields[m.batchFocus].Blur()
-			m.batchFocus = (m.batchFocus + 3) % 4
+			m.batchFocus = (m.batchFocus + 4) % 5
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
 		}
@@ -529,9 +534,20 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 	email := strings.TrimSpace(m.batchFields[1].Value())
 	timeAdjust := strings.TrimSpace(m.batchFields[2].Value())
 	newMessage := strings.TrimSpace(m.batchFields[3].Value())
+	timeSpread := strings.TrimSpace(m.batchFields[4].Value())
 
 	if m.editMap == nil {
 		m.editMap = make(map[string]*gitops.ForgeChange)
+	}
+
+	// Parse time spread duration if provided
+	var timeSpreadDuration time.Duration
+	var hasTimeSpread bool
+	if timeSpread != "" {
+		if d, ok := parseDuration(timeSpread); ok {
+			timeSpreadDuration = d
+			hasTimeSpread = true
+		}
 	}
 
 	for hashStr, selected := range m.selectedCommits {
@@ -550,32 +566,62 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 			continue
 		}
 
-		change := gitops.ForgeChange{
-			OriginalHash: commit.Hash,
+		// Start with existing change if any, otherwise create new
+		var change gitops.ForgeChange
+		existingChange := m.editMap[hashStr]
+		if existingChange != nil {
+			change = *existingChange // Copy existing changes
+		} else {
+			change = gitops.ForgeChange{
+				OriginalHash: commit.Hash,
+			}
 		}
 
+		// Merge author changes: preserve existing values if new ones are empty
 		if name != "" || email != "" {
-			change.NewAuthor = &gitops.AuthorInfo{
+			newAuthor := &gitops.AuthorInfo{
 				Name:  name,
 				Email: email,
 			}
-			if name == "" {
-				change.NewAuthor.Name = commit.AuthorName
+			// Preserve existing modified values if batch input is empty
+			if existingChange != nil && existingChange.NewAuthor != nil {
+				if name == "" {
+					newAuthor.Name = existingChange.NewAuthor.Name
+				}
+				if email == "" {
+					newAuthor.Email = existingChange.NewAuthor.Email
+				}
+			} else {
+				// Use original commit values if batch input is empty
+				if name == "" {
+					newAuthor.Name = commit.AuthorName
+				}
+				if email == "" {
+					newAuthor.Email = commit.AuthorEmail
+				}
 			}
-			if email == "" {
-				change.NewAuthor.Email = commit.AuthorEmail
-			}
+			change.NewAuthor = newAuthor
 		}
 
+		// Merge time adjustment: accumulate on top of existing modified date
 		if timeAdjust != "" {
-			adjustedDate, err := adjustTime(commit.AuthorDate, timeAdjust)
+			// Start from existing modified date if present, otherwise from original
+			baseDate := commit.AuthorDate
+			if existingChange != nil && existingChange.NewDate != nil {
+				baseDate = *existingChange.NewDate
+			}
+			adjustedDate, err := adjustTime(baseDate, timeAdjust)
 			if err == nil {
 				change.NewDate = &adjustedDate
 			}
 		}
 
+		// Merge message: use provided message, otherwise preserve existing
 		if newMessage != "" {
 			change.NewMessage = newMessage
+		} else if existingChange != nil && existingChange.NewMessage != "" {
+			// Preserve existing message change
+			change.NewMessage = existingChange.NewMessage
 		}
 
 		if change.HasChanges() {
@@ -606,6 +652,59 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	for i := range m.editQueue {
 		m.editMap[m.editQueue[i].OriginalHash.String()] = &m.editQueue[i]
+	}
+
+	if hasTimeSpread {
+		timeSpreadMap := calculateTimeSpread(m.commits, m.selectedCommits, timeSpreadDuration, m.editMap)
+		for hashStr, spreadDuration := range timeSpreadMap {
+			if spreadDuration == 0 {
+				continue
+			}
+			existingChange := m.editMap[hashStr]
+			var change gitops.ForgeChange
+			if existingChange != nil {
+				change = *existingChange
+			} else {
+				for i := range m.commits {
+					if m.commits[i].Hash.String() == hashStr {
+						change = gitops.ForgeChange{
+							OriginalHash: m.commits[i].Hash,
+						}
+						break
+					}
+				}
+			}
+
+			baseDate := change.NewDate
+			if baseDate == nil {
+				for i := range m.commits {
+					if m.commits[i].Hash.String() == hashStr {
+						baseDate = &m.commits[i].AuthorDate
+						break
+					}
+				}
+			}
+			if baseDate != nil {
+				newDate := baseDate.Add(spreadDuration)
+				change.NewDate = &newDate
+			}
+
+			if existingChange != nil {
+				for i, c := range m.editQueue {
+					if c.OriginalHash.String() == hashStr {
+						m.editQueue[i] = change
+						break
+					}
+				}
+			} else {
+				m.editQueue = append(m.editQueue, change)
+			}
+		}
+
+		m.editMap = make(map[string]*gitops.ForgeChange)
+		for i := range m.editQueue {
+			m.editMap[m.editQueue[i].OriginalHash.String()] = &m.editQueue[i]
+		}
 	}
 
 	m.selectedCommits = make(map[string]bool)
@@ -653,6 +752,125 @@ func adjustTime(original time.Time, adjustment string) (time.Time, error) {
 		return original.Add(-duration), nil
 	}
 	return original.Add(duration), nil
+}
+
+// parseDuration parses a duration string like "+1h", "-30m", "+1d" into a time.Duration.
+// Returns the duration and a bool indicating if parsing was successful.
+func parseDuration(adjustment string) (time.Duration, bool) {
+	adj := strings.TrimSpace(adjustment)
+	if len(adj) < 2 {
+		return 0, false
+	}
+
+	sign := 1
+	if adj[0] == '-' {
+		sign = -1
+		adj = adj[1:]
+	} else if adj[0] == '+' {
+		adj = adj[1:]
+	}
+
+	var amount int
+	var unit string
+	if _, err := fmt.Sscanf(adj, "%d%s", &amount, &unit); err != nil {
+		return 0, false
+	}
+
+	duration := time.Duration(amount)
+	switch unit {
+	case "s", "sec", "second", "seconds":
+		duration *= time.Second
+	case "m", "min", "minute", "minutes":
+		duration *= time.Minute
+	case "h", "hour", "hours":
+		duration *= time.Hour
+	case "d", "day", "days":
+		duration *= 24 * time.Hour
+	case "w", "week", "weeks":
+		duration *= 7 * 24 * time.Hour
+	default:
+		return 0, false
+	}
+
+	if sign < 0 {
+		return -duration, true
+	}
+	return duration, true
+}
+
+// calculateTimeSpread distributes timeToAdd proportionally across commits
+// based on time gaps between consecutive commits.
+// Returns a map of commit hash -> time to add for each commit (first commit gets 0).
+func calculateTimeSpread(
+	commits []gitops.CommitInfo,
+	selectedHashes map[string]bool,
+	timeToAdd time.Duration,
+	editMap map[string]*gitops.ForgeChange,
+) map[string]time.Duration {
+	result := make(map[string]time.Duration)
+
+	// Get selected commits and sort by AuthorDate (newest first)
+	var selectedCommits []gitops.CommitInfo
+	for _, commit := range commits {
+		if selectedHashes[commit.Hash.String()] {
+			selectedCommits = append(selectedCommits, commit)
+		}
+	}
+
+	// Need at least 2 commits to spread time
+	if len(selectedCommits) < 2 {
+		return result
+	}
+
+	// Get effective date for a commit (modified date from editMap or original)
+	getEffectiveDate := func(commit gitops.CommitInfo) time.Time {
+		hashStr := commit.Hash.String()
+		if editMap != nil && editMap[hashStr] != nil && editMap[hashStr].NewDate != nil {
+			return *editMap[hashStr].NewDate
+		}
+		return commit.AuthorDate
+	}
+
+	// Calculate gaps between consecutive commits (newest to oldest)
+	// gaps[i] = time gap between selectedCommits[i] and selectedCommits[i+1]
+	gaps := make([]time.Duration, len(selectedCommits)-1)
+	var totalSpan time.Duration
+
+	for i := 0; i < len(gaps); i++ {
+		currentDate := getEffectiveDate(selectedCommits[i])
+		nextDate := getEffectiveDate(selectedCommits[i+1])
+		gap := currentDate.Sub(nextDate)
+		if gap < 0 {
+			gap = -gap // Ensure positive gap
+		}
+		gaps[i] = gap
+		totalSpan += gap
+	}
+
+	// If total span is 0, distribute equally (excluding oldest)
+	if totalSpan == 0 {
+		equalShare := timeToAdd / time.Duration(len(selectedCommits)-1)
+		for i := 0; i < len(selectedCommits)-1; i++ {
+			result[selectedCommits[i].Hash.String()] = equalShare
+		}
+		result[selectedCommits[len(selectedCommits)-1].Hash.String()] = 0
+		return result
+	}
+
+	// Distribute time proportionally based on distance from oldest
+	// Distance from oldest for commit i = sum of gaps[i] + gaps[i+1] + ... + gaps[len-1]
+	// Oldest commit (len-1) has distance 0, newest commit (0) has distance = totalSpan
+	for i := 0; i < len(selectedCommits); i++ {
+		distanceFromOldest := time.Duration(0)
+		for j := i; j < len(gaps); j++ {
+			distanceFromOldest += gaps[j]
+		}
+		proportion := float64(distanceFromOldest) / float64(totalSpan)
+		addedTime := time.Duration(float64(timeToAdd) * proportion)
+		result[selectedCommits[i].Hash.String()] = addedTime
+	}
+
+	return result
 }
 
 func (m Model) buildForgeChange() gitops.ForgeChange {
@@ -935,12 +1153,14 @@ func (m Model) renderBatchEditView() string {
 		"Author Email",
 		"Time Adjust",
 		"Message",
+		"Time Spread",
 	}
 	placeholders := []string{
 		"(empty = keep original)",
 		"(empty = keep original)",
 		"e.g., -2h, +1d, -30m",
 		"(empty = keep original)",
+		"e.g., +1h, -30m (weighted)",
 	}
 
 	for i, input := range m.batchFields {
