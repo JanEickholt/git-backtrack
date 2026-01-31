@@ -1298,6 +1298,8 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	dateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
 
@@ -1305,6 +1307,8 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 		hashStyle = hashStyle.Background(bg)
 		nameStyle = nameStyle.Background(bg)
 		dateStyle = dateStyle.Background(bg)
+		addStyle = addStyle.Background(bg)
+		delStyle = delStyle.Background(bg)
 		msgStyle = msgStyle.Background(bg)
 		sepStyle = sepStyle.Background(bg)
 	}
@@ -1312,15 +1316,18 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	hashPart := hashStyle.Render(original.ShortHash)
 	namePart := nameStyle.Render(name)
 	datePart := dateStyle.Render(date)
+	addPart := addStyle.Render(fmt.Sprintf("+%d", original.Additions))
+	delPart := delStyle.Render(fmt.Sprintf("-%d", original.Deletions))
 
-	staticWidth := len(original.ShortHash) + 2 + len(name) + 2 + len(date) + 2
+	statsStr := fmt.Sprintf("+%d -%d", original.Additions, original.Deletions)
+	staticWidth := len(original.ShortHash) + 2 + len(name) + 2 + len(date) + 2 + len(statsStr) + 2
 	availableForMsg := width - staticWidth - suffixWidth
 	if availableForMsg > 0 && len(msg) > availableForMsg {
 		msg = msg[:availableForMsg-3] + "..."
 	}
 
 	sep := sepStyle.Render("  ")
-	line := hashPart + sep + namePart + sep + datePart + sep + msgStyle.Render(msg)
+	line := hashPart + sep + namePart + sep + datePart + sep + addPart + " " + delPart + sep + msgStyle.Render(msg)
 
 	if highlight {
 		line += suffix
@@ -1381,10 +1388,12 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		return
 	}
 
-	line := fmt.Sprintf("%s  %s  %s  %s",
+	line := fmt.Sprintf("%s  %s  %s  +%d -%d  %s",
 		i.commit.ShortHash,
 		i.commit.AuthorName,
 		i.commit.AuthorDate.In(time.Local).Format("2006-01-02 15:04"),
+		i.commit.Additions,
+		i.commit.Deletions,
 		strings.Split(i.commit.Message, "\n")[0],
 	)
 

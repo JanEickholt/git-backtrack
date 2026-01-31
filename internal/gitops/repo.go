@@ -27,6 +27,8 @@ type CommitInfo struct {
 	AuthorDate  time.Time
 	Message     string
 	Parents     []plumbing.Hash
+	Additions   int
+	Deletions   int
 }
 
 type Repository struct {
@@ -152,6 +154,14 @@ func commitHistory(repo *git.Repository, start *object.Commit, commits *[]Commit
 		}
 		seen[commit.Hash] = true
 
+		stats, _ := commit.Stats()
+		additions := 0
+		deletions := 0
+		for _, stat := range stats {
+			additions += stat.Addition
+			deletions += stat.Deletion
+		}
+
 		*commits = append(*commits, CommitInfo{
 			Hash:        commit.Hash,
 			ShortHash:   commit.Hash.String()[:7],
@@ -160,6 +170,8 @@ func commitHistory(repo *git.Repository, start *object.Commit, commits *[]Commit
 			AuthorDate:  commit.Author.When,
 			Message:     commit.Message,
 			Parents:     commit.ParentHashes,
+			Additions:   additions,
+			Deletions:   deletions,
 		})
 
 		for _, parentHash := range commit.ParentHashes {
