@@ -25,6 +25,7 @@ const (
 	ViewBatchEdit
 	ViewConfirm
 	ViewResult
+	ViewBranch
 )
 
 type EditField int
@@ -63,25 +64,29 @@ type Model struct {
 	width  int
 	height int
 	keys   keyMap
+
+	currentBranch string
+	branchList    list.Model
 }
 
 type keyMap struct {
-	Up        key.Binding
-	Down      key.Binding
-	Edit      key.Binding
-	Reset     key.Binding
-	Apply     key.Binding
-	Quit      key.Binding
-	Confirm   key.Binding
-	Cancel    key.Binding
-	Tab       key.Binding
-	ShiftTab  key.Binding
-	Select    key.Binding
-	BatchEdit key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	Edit         key.Binding
+	Reset        key.Binding
+	Apply        key.Binding
+	Quit         key.Binding
+	Confirm      key.Binding
+	Cancel       key.Binding
+	Tab          key.Binding
+	ShiftTab     key.Binding
+	Select       key.Binding
+	BatchEdit    key.Binding
+	SwitchBranch key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Edit, k.Select, k.BatchEdit, k.Apply, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Edit, k.Select, k.BatchEdit, k.SwitchBranch, k.Apply, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -89,7 +94,8 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down},
 		{k.Edit, k.Select},
 		{k.BatchEdit, k.Reset},
-		{k.Apply, k.Quit},
+		{k.SwitchBranch, k.Apply},
+		{k.Quit},
 	}
 }
 
@@ -105,8 +111,9 @@ func defaultKeyMap() keyMap {
 		Cancel:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 		Tab:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next")),
 		ShiftTab:  key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev")),
-		Select:    key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
-		BatchEdit: key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "batch edit")),
+		Select:       key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
+		BatchEdit:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "batch edit")),
+		SwitchBranch: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "switch branch")),
 	}
 }
 
@@ -156,7 +163,19 @@ func findCommitForVisualLine(cache []int, visualLine int) int {
 }
 
 func NewModel(repo *gitops.Repository) Model {
-	commits, err := repo.ListAllCommits()
+	headRef, _ := repo.GetHead()
+	currentBranch := ""
+	if headRef != nil && headRef.Name().IsBranch() {
+		currentBranch = headRef.Name().Short()
+	}
+
+	var commits []gitops.CommitInfo
+	var err error
+	if currentBranch != "" {
+		commits, err = repo.ListCommitsFromRef("refs/heads/" + currentBranch)
+	} else {
+		commits, err = repo.ListAllCommits()
+	}
 	if err != nil {
 		return Model{
 			err:             err,
@@ -184,6 +203,18 @@ func NewModel(repo *gitops.Repository) Model {
 	l.SetFilteringEnabled(false)
 	l.Styles.Title = titleStyle
 
+	branches, _ := repo.ListBranches()
+	branchItems := make([]list.Item, len(branches))
+	for i, b := range branches {
+		branchItems[i] = branchItem{name: b}
+	}
+	bd := branchDelegate{}
+	bl := list.New(branchItems, bd, 80, 20)
+	bl.Title = "Switch Branch"
+	bl.SetShowStatusBar(false)
+	bl.SetFilteringEnabled(false)
+	bl.Styles.Title = titleStyle
+
 	return Model{
 		state:           ViewList,
 		repo:            repo,
@@ -196,6 +227,8 @@ func NewModel(repo *gitops.Repository) Model {
 		help:            help.New(),
 		keys:            defaultKeyMap(),
 		list:            l,
+		currentBranch:   currentBranch,
+		branchList:      bl,
 	}
 }
 
@@ -209,6 +242,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.list.SetSize(msg.Width, m.height-2)
+		m.branchList.SetSize(msg.Width, m.height-2)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -223,11 +257,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleConfirmKey(msg)
 		case ViewResult:
 			return m.handleResultKey(msg)
+		case ViewBranch:
+			return m.handleBranchKey(msg)
 		}
 	}
 
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	switch m.state {
+	case ViewBranch:
+		m.branchList, cmd = m.branchList.Update(msg)
+	default:
+		m.list, cmd = m.list.Update(msg)
+	}
 	return m, cmd
 }
 
@@ -298,6 +339,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.state = ViewConfirm
+		return m, nil
+
+	case key.Matches(msg, m.keys.SwitchBranch):
+		m.state = ViewBranch
 		return m, nil
 	}
 
@@ -534,6 +579,39 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.editFields[m.focusField], cmd = m.editFields[m.focusField].Update(msg)
 	}
+	return m, cmd
+}
+
+func (m Model) handleBranchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Quit), key.Matches(msg, m.keys.Cancel):
+		m.state = ViewList
+		return m, nil
+
+	case key.Matches(msg, m.keys.Confirm):
+		idx := m.branchList.Index()
+		if idx >= 0 && idx < len(m.branchList.Items()) {
+			item := m.branchList.Items()[idx]
+			if bi, ok := item.(branchItem); ok {
+				err := m.repo.SwitchBranch(bi.name)
+				if err != nil {
+					m.err = err
+					m.state = ViewList
+					return m, nil
+				}
+				m.currentBranch = bi.name
+				m.editQueue = make([]gitops.ForgeChange, 0)
+				m.editMap = make(map[string]*gitops.ForgeChange)
+				m.selectedCommits = make(map[string]bool)
+				m.refresh()
+			}
+		}
+		m.state = ViewList
+		return m, nil
+	}
+
+	var cmd tea.Cmd
+	m.branchList, cmd = m.branchList.Update(msg)
 	return m, cmd
 }
 
@@ -980,17 +1058,7 @@ func (m Model) handleConfirmKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.result = result
 				m.result.BackupRef = backupRef
-				m.repo.Reload()
-				commits, _ := m.repo.ListAllCommits()
-				m.commits = commits
-				m.graph = gitops.BuildGraph(commits)
-				m.editQueue = make([]gitops.ForgeChange, 0)
-				m.editMap = make(map[string]*gitops.ForgeChange)
-				items := make([]list.Item, len(commits))
-				for i, commit := range commits {
-					items[i] = commitItem{commit: commit}
-				}
-				m.list.SetItems(items)
+				m.refresh()
 			}
 			m.state = ViewResult
 			return m, nil
@@ -1008,7 +1076,13 @@ func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) refresh() {
-	commits, err := m.repo.ListAllCommits()
+	var commits []gitops.CommitInfo
+	var err error
+	if m.currentBranch != "" {
+		commits, err = m.repo.ListCommitsFromRef("refs/heads/" + m.currentBranch)
+	} else {
+		commits, err = m.repo.ListAllCommits()
+	}
 	if err != nil {
 		return
 	}
@@ -1040,6 +1114,8 @@ func (m Model) View() string {
 		return m.renderConfirmView()
 	case ViewResult:
 		return m.renderResultView()
+	case ViewBranch:
+		return m.renderBranchView()
 	default:
 		return ""
 	}
@@ -1056,7 +1132,27 @@ func (m Model) renderListView() string {
 	if m.visualLineCache == nil || len(m.visualLineCache) == 0 {
 		return statusStyle.Render("Loading...")
 	}
-	b.WriteString(titleStyle.Render("git-backtrack"))
+	selectedCount := 0
+	for _, v := range m.selectedCommits {
+		if v {
+			selectedCount++
+		}
+	}
+
+	var headerParts []string
+	headerParts = append(headerParts, "git-backtrack")
+	if m.currentBranch != "" {
+		headerParts = append(headerParts, m.currentBranch)
+	}
+	headerParts = append(headerParts, fmt.Sprintf("%d commits", len(m.commits)))
+	if selectedCount > 0 {
+		headerParts = append(headerParts, fmt.Sprintf("%d selected", selectedCount))
+	}
+	if len(m.editQueue) > 0 {
+		headerParts = append(headerParts, fmt.Sprintf("%d pending", len(m.editQueue)))
+	}
+
+	b.WriteString(titleStyle.Render(strings.Join(headerParts, " | ")))
 	b.WriteString("\n")
 	maxRows := m.height - 2
 	if maxRows <= 0 {
@@ -1087,7 +1183,8 @@ func (m Model) renderListView() string {
 	for commitIndex < len(m.commits) && visualLinesRendered < maxRows {
 		commit := m.commits[commitIndex]
 		highlight := commitIndex == m.list.Index()
-		connectorLines := gitops.RenderConnectorLines(m.graph, commitIndex, style)
+		// connectorLines disabled for now due to rendering issues
+		// connectorLines := gitops.RenderConnectorLines(m.graph, commitIndex, style)
 
 		if !skipCommitLine {
 			hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
@@ -1138,37 +1235,31 @@ func (m Model) renderListView() string {
 		}
 		skipCommitLine = false
 
-		connectorStartIdx := 0
-		if linesToSkip > 0 {
-			connectorStartIdx = linesToSkip
-			linesToSkip = 0
-		}
-
-		for i := connectorStartIdx; i < len(connectorLines) && visualLinesRendered < maxRows; i++ {
-			connRow := connectorLines[i]
-			if connRow == "" {
-				continue
-			}
-			b.WriteString("      ")
-			b.WriteString(connRow)
-			b.WriteString("\n")
-			visualLinesRendered++
-		}
+		// connector line rendering disabled for now
+		// connectorStartIdx := 0
+		// if linesToSkip > 0 {
+		// 	connectorStartIdx = linesToSkip
+		// 	linesToSkip = 0
+		// }
+		// for i := connectorStartIdx; i < len(connectorLines) && visualLinesRendered < maxRows; i++ {
+		// 	connRow := connectorLines[i]
+		// 	if connRow == "" {
+		// 		continue
+		// 	}
+		// 	b.WriteString("      ")
+		// 	b.WriteString(connRow)
+		// 	b.WriteString("\n")
+		// 	visualLinesRendered++
+		// }
 
 		commitIndex++
 	}
 
-	selectedCount := 0
-	for _, v := range m.selectedCommits {
-		if v {
-			selectedCount++
-		}
-	}
 	var statusText string
 	if selectedCount > 0 {
-		statusText = fmt.Sprintf("%d commits | %d selected | %d pending | space:select b:batch a:apply q:quit", len(m.commits), selectedCount, len(m.editQueue))
+		statusText = fmt.Sprintf("space:select b:batch c:switch a:apply q:quit")
 	} else {
-		statusText = fmt.Sprintf("%d commits | %d pending | e:edit space:select b:batch a:apply q:quit", len(m.commits), len(m.editQueue))
+		statusText = fmt.Sprintf("e:edit space:select b:batch c:switch a:apply q:quit")
 	}
 	b.WriteString(statusStyle.Render(statusText))
 	return b.String()
@@ -1332,6 +1423,16 @@ func (m Model) renderResultView() string {
 	return b.String()
 }
 
+func (m Model) renderBranchView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Switch Branch"))
+	b.WriteString("\n\n")
+	b.WriteString(m.branchList.View())
+	b.WriteString("\n")
+	b.WriteString(statusStyle.Render("enter:select esc:cancel"))
+	return b.String()
+}
+
 func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange, width int, highlight bool, suffix string, suffixWidth int) string {
 	name := original.AuthorName
 	date := original.AuthorDate.In(time.Local).Format("2006-01-02 15:04")
@@ -1455,6 +1556,39 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 
 	if index%2 == 0 {
 		line = lipgloss.NewStyle().Background(lipgloss.Color("235")).Render(line)
+	}
+
+	fmt.Fprintln(w, line)
+}
+
+type branchItem struct {
+	name string
+}
+
+func (i branchItem) FilterValue() string { return i.name }
+
+type branchDelegate struct{}
+
+func (d branchDelegate) Height() int                             { return 1 }
+func (d branchDelegate) Spacing() int                            { return 0 }
+func (d branchDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
+
+func (d branchDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	i, ok := item.(branchItem)
+	if !ok {
+		return
+	}
+
+	prefix := "  "
+	if index == m.Index() {
+		prefix = "> "
+	}
+
+	line := prefix + i.name
+	if index == m.Index() {
+		line = selectedStyle.Render(line)
+	} else {
+		line = statusStyle.Render(line)
 	}
 
 	fmt.Fprintln(w, line)

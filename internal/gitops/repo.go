@@ -101,6 +101,8 @@ func (r *Repository) ListAllCommits() ([]CommitInfo, error) {
 }
 
 func (r *Repository) ListCommitsFromRef(refName string) ([]CommitInfo, error) {
+	r.Reload()
+
 	ref, err := r.repo.Reference(plumbing.ReferenceName(refName), true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get reference %s: %w", refName, err)
@@ -118,7 +120,29 @@ func (r *Repository) ListCommitsFromRef(refName string) ([]CommitInfo, error) {
 		return nil, err
 	}
 
+	// Sort commits by date, newest first
+	sort.Slice(commits, func(i, j int) bool {
+		return commits[i].AuthorDate.After(commits[j].AuthorDate)
+	})
+
 	return commits, nil
+}
+
+func (r *Repository) SwitchBranch(branchName string) error {
+	w, err := r.repo.Worktree()
+	if err != nil {
+		return fmt.Errorf("failed to get worktree: %w", err)
+	}
+
+	refName := plumbing.ReferenceName("refs/heads/" + branchName)
+	err = w.Checkout(&git.CheckoutOptions{
+		Branch: refName,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to checkout branch %s: %w", branchName, err)
+	}
+
+	return nil
 }
 
 func (r *Repository) GetHead() (*plumbing.Reference, error) {

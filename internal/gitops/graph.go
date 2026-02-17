@@ -376,8 +376,9 @@ func RenderGraphLineWithSuffix(graph *Graph, lineIndex int, width int, style Gra
 		sepStyle = sepStyle.Background(bg)
 	}
 
-	lanePrefix := renderLanePrefix(node.Column, highlight, style, bg)
-	laneWidth := node.Column * 2
+	// lane prefix (indent) disabled for now due to rendering issues
+	// lanePrefix := renderLanePrefix(node.Column, highlight, style, bg)
+	// laneWidth := node.Column * 2
 
 	var dot string
 	if node.IsMerge {
@@ -394,8 +395,8 @@ func RenderGraphLineWithSuffix(graph *Graph, lineIndex int, width int, style Gra
 		}
 	}
 
-	prefix := lanePrefix + dot + sepStyle.Render(" ")
-	commitStr := renderCommitInfoWithSuffix(commit, width-laneWidth-2, highlight, suffix, suffixWidth)
+	prefix := dot + sepStyle.Render(" ")
+	commitStr := renderCommitInfoWithSuffix(commit, width-2, highlight, suffix, suffixWidth)
 	return prefix + commitStr
 }
 
