@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -49,6 +50,7 @@ type Model struct {
 
 	editingCommit *gitops.CommitInfo
 	editFields    []textinput.Model
+	messageField  textarea.Model
 	focusField    EditField
 
 	batchFields []textinput.Model
@@ -344,7 +346,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) initEditFields() {
-	m.editFields = make([]textinput.Model, 5)
+	m.editFields = make([]textinput.Model, 4)
 
 	commit := m.editingCommit
 	existingChange := m.editMap[commit.Hash.String()]
@@ -354,9 +356,6 @@ func (m *Model) initEditFields() {
 	date := commit.AuthorDate.In(time.Local).Format("2006-01-02")
 	timeStr := commit.AuthorDate.In(time.Local).Format("15:04:05")
 	msg := commit.Message
-	if idx := strings.Index(msg, "\n"); idx != -1 {
-		msg = msg[:idx]
-	}
 
 	if existingChange != nil {
 		if existingChange.NewAuthor != nil {
@@ -393,12 +392,28 @@ func (m *Model) initEditFields() {
 	m.editFields[Time].SetValue(timeStr)
 	m.editFields[Time].Width = 40
 
-	m.editFields[Message] = textinput.New()
-	m.editFields[Message].Placeholder = "Commit message"
-	m.editFields[Message].SetValue(msg)
-	m.editFields[Message].Width = 60
+	m.messageField = textarea.New()
+	m.messageField.Placeholder = "Commit message"
+	m.messageField.SetValue(msg)
+	m.messageField.SetWidth(60)
+	m.messageField.SetHeight(messageHeight(msg))
 
 	m.focusField = FieldName
+}
+
+func messageHeight(msg string) int {
+	if msg == "" {
+		return 3
+	}
+	lines := strings.Count(msg, "\n") + 1
+	height := lines + 2
+	if height < 3 {
+		height = 3
+	}
+	if height > 10 {
+		height = 10
+	}
+	return height
 }
 
 func (m *Model) initBatchFields() {
@@ -443,6 +458,9 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Confirm):
+		if m.focusField == Message {
+			break
+		}
 		change := m.buildForgeChange()
 		hashStr := change.OriginalHash.String()
 
@@ -483,19 +501,39 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Tab):
-		m.editFields[m.focusField].Blur()
+		if m.focusField == Message {
+			m.messageField.Blur()
+		} else {
+			m.editFields[m.focusField].Blur()
+		}
 		m.focusField = (m.focusField + 1) % 5
-		m.editFields[m.focusField].Focus()
+		if m.focusField == Message {
+			m.messageField.Focus()
+		} else {
+			m.editFields[m.focusField].Focus()
+		}
 		return m, nil
 
 	case key.Matches(msg, m.keys.ShiftTab):
-		m.editFields[m.focusField].Blur()
+		if m.focusField == Message {
+			m.messageField.Blur()
+		} else {
+			m.editFields[m.focusField].Blur()
+		}
 		m.focusField = (m.focusField + 4) % 5
-		m.editFields[m.focusField].Focus()
+		if m.focusField == Message {
+			m.messageField.Focus()
+		} else {
+			m.editFields[m.focusField].Focus()
+		}
 		return m, nil
 	}
 
-	m.editFields[m.focusField], cmd = m.editFields[m.focusField].Update(msg)
+	if m.focusField == Message {
+		m.messageField, cmd = m.messageField.Update(msg)
+	} else {
+		m.editFields[m.focusField], cmd = m.editFields[m.focusField].Update(msg)
+	}
 	return m, cmd
 }
 
@@ -893,8 +931,8 @@ func (m Model) buildForgeChange() gitops.ForgeChange {
 		change.NewDate = &newDateTime
 	}
 
-	if m.editFields[Message].Value() != strings.Split(m.editingCommit.Message, "\n")[0] {
-		change.NewMessage = m.editFields[Message].Value()
+	if m.messageField.Value() != m.editingCommit.Message {
+		change.NewMessage = m.messageField.Value()
 	}
 
 	return change
@@ -1192,7 +1230,7 @@ func (m Model) renderEditView() string {
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Edit Commit: %s", m.editingCommit.ShortHash)))
 	b.WriteString("\n\n")
 
-	labels := []string{"Author Name", "Author Email", "Date (YYYY-MM-DD)", "Time (HH:MM:SS)", "Message"}
+	labels := []string{"Author Name", "Author Email", "Date (YYYY-MM-DD)", "Time (HH:MM:SS)"}
 	for i, input := range m.editFields {
 		prefix := "  "
 		if i == int(m.focusField) {
@@ -1207,11 +1245,28 @@ func (m Model) renderEditView() string {
 		b.WriteString("\n\n")
 	}
 
+	prefix := "  "
+	if m.focusField == Message {
+		prefix = "> "
+	}
+	b.WriteString(prefix + labelStyle.Render("Message:"))
+	b.WriteString("\n")
+	if m.focusField == Message {
+		b.WriteString(editStyle.Render(m.messageField.View()))
+	} else {
+		b.WriteString(statusStyle.Render(m.messageField.View()))
+	}
+	b.WriteString("\n\n")
+
 	b.WriteString(statusStyle.Render("Original: "))
 	b.WriteString(fmt.Sprintf("%s <%s> %s",
 		m.editingCommit.AuthorName,
 		m.editingCommit.AuthorEmail,
 		m.editingCommit.AuthorDate.Format("2006-01-02 15:04:05")))
+	b.WriteString("\n")
+	b.WriteString(statusStyle.Render("Original Message:"))
+	b.WriteString("\n")
+	b.WriteString(m.editingCommit.Message)
 	b.WriteString("\n\n")
 
 	b.WriteString(labelStyle.Render("[Tab]") + " next  ")
@@ -1237,7 +1292,8 @@ func (m Model) renderConfirmView() string {
 			b.WriteString(fmt.Sprintf("     Date: %s\n", change.NewDate.Format("2006-01-02 15:04:05")))
 		}
 		if change.NewMessage != "" {
-			b.WriteString(fmt.Sprintf("     Message: %s\n", strings.Split(change.NewMessage, "\n")[0]))
+			fullMsg := strings.ReplaceAll(change.NewMessage, "\n", " ")
+			b.WriteString(fmt.Sprintf("     Message: %s\n", fullMsg))
 		}
 		b.WriteString("\n")
 	}
