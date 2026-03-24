@@ -1,0 +1,90 @@
+package gitops
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-git/go-git/v5/plumbing"
+)
+
+func TestRenderGraphLineShowsCommitTimezone(t *testing.T) {
+	commitTime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.FixedZone("test", 2*60*60))
+	commits := []CommitInfo{
+		{
+			Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+			ShortHash:  "1111111",
+			AuthorName: "Test User",
+			AuthorDate: commitTime,
+			Message:    "message",
+		},
+	}
+
+	line := RenderGraphLine(BuildGraph(commits), commits, 0, 120, DefaultGraphStyle(), false)
+	if !strings.Contains(line, "2024-01-02 03:04 +0200") {
+		t.Fatalf("rendered line %q does not include timezone offset", line)
+	}
+}
+
+func TestParseGraphRowsKeepsConnectorRows(t *testing.T) {
+	output := "* " + graphCommitMarker + "1111111111111111111111111111111111111111\n" +
+		"|\\  \n" +
+		"| * " + graphCommitMarker + "2222222222222222222222222222222222222222\n"
+
+	graph := ParseGraphRows(output)
+	if len(graph.Rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(graph.Rows))
+	}
+	if !graph.Rows[0].IsCommit || graph.Rows[0].Prefix != "* " {
+		t.Fatalf("first row = %+v, want commit row", graph.Rows[0])
+	}
+	if graph.Rows[1].IsCommit || graph.Rows[1].Prefix != "|\\  " {
+		t.Fatalf("second row = %+v, want connector row", graph.Rows[1])
+	}
+	if !graph.Rows[2].IsCommit || graph.Rows[2].Prefix != "| * " {
+		t.Fatalf("third row = %+v, want nested commit row", graph.Rows[2])
+	}
+}
+
+func TestRenderGraphLineTruncatesLongPrefix(t *testing.T) {
+	graph := &Graph{
+		Rows: []GraphRow{{Prefix: strings.Repeat("| ", 20), CommitIndex: -1}},
+	}
+
+	line := RenderGraphLine(graph, nil, 0, 10, DefaultGraphStyle(), false)
+	if len(line) > 10 {
+		t.Fatalf("line len = %d, want <= 10: %q", len(line), line)
+	}
+}
+
+func TestCommitColumnFormatting(t *testing.T) {
+	author := FormatCommitAuthor("Jan", 8)
+	if len(author) != 8 {
+		t.Fatalf("author len = %d, want %d", len(author), 8)
+	}
+	if author[:3] != "Jan" {
+		t.Fatalf("author = %q, want prefix Jan", author)
+	}
+
+	stat := FormatCommitStat("+", 8, 4)
+	if stat != "  +8" {
+		t.Fatalf("stat = %q, want %q", stat, "  +8")
+	}
+}
+
+func TestStatColumnWidthUsesLargestDisplayedCount(t *testing.T) {
+	commits := []CommitInfo{
+		{Additions: 8, Deletions: 12},
+		{Additions: 1234, Deletions: 0},
+	}
+
+	width := StatColumnWidth(commits)
+	if width != 5 {
+		t.Fatalf("width = %d, want 5", width)
+	}
+
+	stat := FormatCommitStat("+", 8, width)
+	if stat != "   +8" {
+		t.Fatalf("stat = %q, want %q", stat, "   +8")
+	}
+}

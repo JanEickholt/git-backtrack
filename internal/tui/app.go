@@ -47,7 +47,6 @@ type Model struct {
 	editMap         map[string]*gitops.ForgeChange
 	selectedCommits map[string]bool
 	scrollOffset    int
-	visualLineCache []int // visualLineCache[i] = total visual lines for commits 0..i-1
 
 	editingCommit *gitops.CommitInfo
 	editFields    []textinput.Model
@@ -69,99 +68,6 @@ type Model struct {
 	branchList    list.Model
 }
 
-type keyMap struct {
-	Up           key.Binding
-	Down         key.Binding
-	Edit         key.Binding
-	Reset        key.Binding
-	Apply        key.Binding
-	Quit         key.Binding
-	Confirm      key.Binding
-	Cancel       key.Binding
-	Tab          key.Binding
-	ShiftTab     key.Binding
-	Select       key.Binding
-	BatchEdit    key.Binding
-	SwitchBranch key.Binding
-}
-
-func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Edit, k.Select, k.BatchEdit, k.SwitchBranch, k.Apply, k.Quit}
-}
-
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Up, k.Down},
-		{k.Edit, k.Select},
-		{k.BatchEdit, k.Reset},
-		{k.SwitchBranch, k.Apply},
-		{k.Quit},
-	}
-}
-
-func defaultKeyMap() keyMap {
-	return keyMap{
-		Up:        key.NewBinding(key.WithKeys("up", "k"), key.WithHelp("↑/k", "up")),
-		Down:      key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
-		Edit:      key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
-		Reset:     key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset")),
-		Apply:     key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "apply")),
-		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-		Confirm:   key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm")),
-		Cancel:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
-		Tab:       key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next")),
-		ShiftTab:  key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev")),
-		Select:       key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
-		BatchEdit:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "batch edit")),
-		SwitchBranch: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "switch branch")),
-	}
-}
-
-var (
-	titleStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14")).Background(lipgloss.Color("0")).Padding(0, 1)
-	statusStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	selectedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
-	editStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	selectedBgStyle = lipgloss.NewStyle().Background(lipgloss.Color("20"))
-	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	successStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
-	labelStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
-)
-
-func countVisualLines(graph *gitops.Graph, commitIndex int) int {
-	if graph == nil || commitIndex >= len(graph.Lines) {
-		return 1
-	}
-	line := graph.Lines[commitIndex]
-	connectorCount := 0
-	for _, row := range line.ConnectorRows {
-		if gitops.HasDiagonal(row) {
-			connectorCount++
-		}
-	}
-	return 1 + connectorCount
-}
-
-func buildVisualLineCache(graph *gitops.Graph, commits []gitops.CommitInfo) []int {
-	cache := make([]int, len(commits)+1)
-	for i := range commits {
-		cache[i+1] = cache[i] + countVisualLines(graph, i)
-	}
-	return cache
-}
-
-func findCommitForVisualLine(cache []int, visualLine int) int {
-	if cache == nil || len(cache) == 0 {
-		return 0
-	}
-	for i := 1; i < len(cache); i++ {
-		if cache[i] > visualLine {
-			return i - 1
-		}
-	}
-	return len(cache) - 2
-}
-
 func NewModel(repo *gitops.Repository) Model {
 	headRef, _ := repo.GetHead()
 	currentBranch := ""
@@ -170,11 +76,12 @@ func NewModel(repo *gitops.Repository) Model {
 	}
 
 	var commits []gitops.CommitInfo
+	var graph *gitops.Graph
 	var err error
 	if currentBranch != "" {
-		commits, err = repo.ListCommitsFromRef("refs/heads/" + currentBranch)
+		commits, graph, err = repo.ListCommitsFromRefWithGraph("refs/heads/" + currentBranch)
 	} else {
-		commits, err = repo.ListAllCommits()
+		commits, graph, err = repo.ListAllCommitsWithGraph()
 	}
 	if err != nil {
 		return Model{
@@ -189,8 +96,6 @@ func NewModel(repo *gitops.Repository) Model {
 		}
 	}
 
-	graph := gitops.BuildGraph(commits)
-	visualLineCache := buildVisualLineCache(graph, commits)
 	items := make([]list.Item, len(commits))
 	for i, commit := range commits {
 		items[i] = commitItem{commit: commit}
@@ -220,7 +125,6 @@ func NewModel(repo *gitops.Repository) Model {
 		repo:            repo,
 		commits:         commits,
 		graph:           graph,
-		visualLineCache: visualLineCache,
 		editQueue:       make([]gitops.ForgeChange, 0),
 		editMap:         make(map[string]*gitops.ForgeChange),
 		selectedCommits: make(map[string]bool),
@@ -300,6 +204,25 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Drop):
+		if len(m.commits) == 0 {
+			return m, nil
+		}
+		idx := m.list.Index()
+		if idx >= 0 && idx < len(m.commits) {
+			commit := m.commits[idx]
+			hash := commit.Hash.String()
+			if existing := m.editMap[hash]; existing != nil && existing.Operation == gitops.ForgeDrop {
+				m.removeChange(hash)
+			} else {
+				m.setChange(gitops.ForgeChange{
+					OriginalHash: commit.Hash,
+					Operation:    gitops.ForgeDrop,
+				})
+			}
+		}
+		return m, nil
+
 	case key.Matches(msg, m.keys.BatchEdit):
 		selectedCount := 0
 		for _, v := range m.selectedCommits {
@@ -321,16 +244,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		idx := m.list.Index()
 		if idx >= 0 && idx < len(m.commits) {
 			hash := m.commits[idx].Hash.String()
-			if m.editMap[hash] != nil {
-				delete(m.editMap, hash)
-				newQueue := make([]gitops.ForgeChange, 0, len(m.editQueue)-1)
-				for _, c := range m.editQueue {
-					if c.OriginalHash.String() != hash {
-						newQueue = append(newQueue, c)
-					}
-				}
-				m.editQueue = newQueue
-			}
+			m.removeChange(hash)
 		}
 		return m, nil
 
@@ -355,37 +269,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	selectedIndex := m.list.Index()
 
-	if m.visualLineCache == nil || len(m.visualLineCache) <= selectedIndex {
+	if m.graph == nil {
 		return m, cmd
 	}
-
-	selectedVisualLine := m.visualLineCache[selectedIndex]
-
-	if selectedVisualLine < m.scrollOffset {
-		distance := m.scrollOffset - selectedVisualLine
-		if distance <= 3 {
-			m.scrollOffset--
-		} else {
-			m.scrollOffset = selectedVisualLine
-		}
-		if m.scrollOffset < 0 {
-			m.scrollOffset = 0
-		}
-	} else if selectedVisualLine >= m.scrollOffset+maxRows {
-		distance := selectedVisualLine - (m.scrollOffset + maxRows - 1)
-		if distance <= 3 {
-			m.scrollOffset++
-		} else {
-			m.scrollOffset = selectedVisualLine
-		}
-		totalLines := m.visualLineCache[len(m.visualLineCache)-1]
-		if m.scrollOffset+maxRows > totalLines {
-			m.scrollOffset = totalLines - maxRows
-			if m.scrollOffset < 0 {
-				m.scrollOffset = 0
-			}
-		}
-	}
+	m.scrollOffset = scrollOffsetForSelectedCommit(m.graph, selectedIndex, m.scrollOffset, maxRows)
 
 	return m, cmd
 }
@@ -685,6 +572,9 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 		// Start with existing change if any, otherwise create new
 		var change gitops.ForgeChange
 		existingChange := m.editMap[hashStr]
+		if existingChange != nil && existingChange.Operation == gitops.ForgeDrop {
+			continue
+		}
 		if existingChange != nil {
 			change = *existingChange // Copy existing changes
 		} else {
@@ -828,167 +718,6 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func adjustTime(original time.Time, adjustment string) (time.Time, error) {
-	adj := strings.TrimSpace(adjustment)
-	if len(adj) < 2 {
-		return original, fmt.Errorf("invalid time adjustment")
-	}
-
-	sign := 1
-	if adj[0] == '-' {
-		sign = -1
-		adj = adj[1:]
-	} else if adj[0] == '+' {
-		adj = adj[1:]
-	}
-
-	var amount int
-	var unit string
-	if _, err := fmt.Sscanf(adj, "%d%s", &amount, &unit); err != nil {
-		return original, fmt.Errorf("invalid time adjustment format")
-	}
-
-	duration := time.Duration(amount)
-	switch unit {
-	case "s", "sec", "second", "seconds":
-		duration *= time.Second
-	case "m", "min", "minute", "minutes":
-		duration *= time.Minute
-	case "h", "hour", "hours":
-		duration *= time.Hour
-	case "d", "day", "days":
-		duration *= 24 * time.Hour
-	case "w", "week", "weeks":
-		duration *= 7 * 24 * time.Hour
-	default:
-		return original, fmt.Errorf("unknown time unit: %s", unit)
-	}
-
-	if sign < 0 {
-		return original.Add(-duration), nil
-	}
-	return original.Add(duration), nil
-}
-
-// parseDuration parses a duration string like "+1h", "-30m", "+1d" into a time.Duration.
-// Returns the duration and a bool indicating if parsing was successful.
-func parseDuration(adjustment string) (time.Duration, bool) {
-	adj := strings.TrimSpace(adjustment)
-	if len(adj) < 2 {
-		return 0, false
-	}
-
-	sign := 1
-	if adj[0] == '-' {
-		sign = -1
-		adj = adj[1:]
-	} else if adj[0] == '+' {
-		adj = adj[1:]
-	}
-
-	var amount int
-	var unit string
-	if _, err := fmt.Sscanf(adj, "%d%s", &amount, &unit); err != nil {
-		return 0, false
-	}
-
-	duration := time.Duration(amount)
-	switch unit {
-	case "s", "sec", "second", "seconds":
-		duration *= time.Second
-	case "m", "min", "minute", "minutes":
-		duration *= time.Minute
-	case "h", "hour", "hours":
-		duration *= time.Hour
-	case "d", "day", "days":
-		duration *= 24 * time.Hour
-	case "w", "week", "weeks":
-		duration *= 7 * 24 * time.Hour
-	default:
-		return 0, false
-	}
-
-	if sign < 0 {
-		return -duration, true
-	}
-	return duration, true
-}
-
-// calculateTimeSpread distributes timeToAdd proportionally across commits
-// based on time gaps between consecutive commits.
-// Returns a map of commit hash -> time to add for each commit (first commit gets 0).
-func calculateTimeSpread(
-	commits []gitops.CommitInfo,
-	selectedHashes map[string]bool,
-	timeToAdd time.Duration,
-	editMap map[string]*gitops.ForgeChange,
-) map[string]time.Duration {
-	result := make(map[string]time.Duration)
-
-	// Get selected commits and sort by AuthorDate (newest first)
-	var selectedCommits []gitops.CommitInfo
-	for _, commit := range commits {
-		if selectedHashes[commit.Hash.String()] {
-			selectedCommits = append(selectedCommits, commit)
-		}
-	}
-
-	// Need at least 2 commits to spread time
-	if len(selectedCommits) < 2 {
-		return result
-	}
-
-	// Get effective date for a commit (modified date from editMap or original)
-	getEffectiveDate := func(commit gitops.CommitInfo) time.Time {
-		hashStr := commit.Hash.String()
-		if editMap != nil && editMap[hashStr] != nil && editMap[hashStr].NewDate != nil {
-			return *editMap[hashStr].NewDate
-		}
-		return commit.AuthorDate
-	}
-
-	// Calculate gaps between consecutive commits (newest to oldest)
-	// gaps[i] = time gap between selectedCommits[i] and selectedCommits[i+1]
-	gaps := make([]time.Duration, len(selectedCommits)-1)
-	var totalSpan time.Duration
-
-	for i := 0; i < len(gaps); i++ {
-		currentDate := getEffectiveDate(selectedCommits[i])
-		nextDate := getEffectiveDate(selectedCommits[i+1])
-		gap := currentDate.Sub(nextDate)
-		if gap < 0 {
-			gap = -gap // Ensure positive gap
-		}
-		gaps[i] = gap
-		totalSpan += gap
-	}
-
-	// If total span is 0, distribute equally (excluding oldest)
-	if totalSpan == 0 {
-		equalShare := timeToAdd / time.Duration(len(selectedCommits)-1)
-		for i := 0; i < len(selectedCommits)-1; i++ {
-			result[selectedCommits[i].Hash.String()] = equalShare
-		}
-		result[selectedCommits[len(selectedCommits)-1].Hash.String()] = 0
-		return result
-	}
-
-	// Distribute time proportionally based on distance from oldest
-	// Distance from oldest for commit i = sum of gaps[i] + gaps[i+1] + ... + gaps[len-1]
-	// Oldest commit (len-1) has distance 0, newest commit (0) has distance = totalSpan
-	for i := 0; i < len(selectedCommits); i++ {
-		distanceFromOldest := time.Duration(0)
-		for j := i; j < len(gaps); j++ {
-			distanceFromOldest += gaps[j]
-		}
-		proportion := float64(distanceFromOldest) / float64(totalSpan)
-		addedTime := time.Duration(float64(timeToAdd) * proportion)
-		result[selectedCommits[i].Hash.String()] = addedTime
-	}
-
-	return result
-}
-
 func (m Model) buildForgeChange() gitops.ForgeChange {
 	change := gitops.ForgeChange{
 		OriginalHash: m.editingCommit.Hash,
@@ -1014,24 +743,6 @@ func (m Model) buildForgeChange() gitops.ForgeChange {
 	}
 
 	return change
-}
-
-func parseDateTime(dateStr, timeStr string, loc *time.Location) (time.Time, error) {
-	datetimeStr := dateStr + " " + timeStr
-
-	layouts := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02 15:04",
-		"2006-01-02",
-	}
-
-	for _, layout := range layouts {
-		t, err := time.ParseInLocation(layout, datetimeStr, loc)
-		if err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("cannot parse datetime: %s", datetimeStr)
 }
 
 func (m Model) handleConfirmKey(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1077,18 +788,18 @@ func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) refresh() {
 	var commits []gitops.CommitInfo
+	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
-		commits, err = m.repo.ListCommitsFromRef("refs/heads/" + m.currentBranch)
+		commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
 	} else {
-		commits, err = m.repo.ListAllCommits()
+		commits, graph, err = m.repo.ListAllCommitsWithGraph()
 	}
 	if err != nil {
 		return
 	}
 	m.commits = commits
-	m.graph = gitops.BuildGraph(commits)
-	m.visualLineCache = buildVisualLineCache(m.graph, commits)
+	m.graph = graph
 	m.editQueue = make([]gitops.ForgeChange, 0)
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	items := make([]list.Item, len(commits))
@@ -1129,7 +840,7 @@ func (m Model) renderListView() string {
 	if len(m.commits) == 0 {
 		return statusStyle.Render("No commits found in repository")
 	}
-	if m.visualLineCache == nil || len(m.visualLineCache) == 0 {
+	if m.graph == nil || len(m.graph.Rows) == 0 {
 		return statusStyle.Render("Loading...")
 	}
 	selectedCount := 0
@@ -1162,104 +873,90 @@ func (m Model) renderListView() string {
 	bg := lipgloss.Color("237")
 	bgStyle := lipgloss.NewStyle().Background(bg)
 	style := gitops.DefaultGraphStyle()
-
-	startCommit := findCommitForVisualLine(m.visualLineCache, m.scrollOffset)
-	if startCommit >= len(m.commits) {
-		startCommit = len(m.commits) - 1
-	}
-	if startCommit < 0 {
-		startCommit = 0
-	}
+	authorWidth := m.authorColumnWidth()
+	statWidth := gitops.StatColumnWidth(m.commits)
 
 	visualLinesRendered := 0
-	commitIndex := startCommit
-	startVisualLine := m.visualLineCache[startCommit]
-	linesToSkip := m.scrollOffset - startVisualLine
-	skipCommitLine := linesToSkip > 0
-	if skipCommitLine {
-		linesToSkip--
-	}
+	rowIndex := m.scrollOffset
+	for rowIndex < len(m.graph.Rows) && visualLinesRendered < maxRows {
+		row := m.graph.Rows[rowIndex]
+		lineWidth := m.width - 6
 
-	for commitIndex < len(m.commits) && visualLinesRendered < maxRows {
-		commit := m.commits[commitIndex]
-		highlight := commitIndex == m.list.Index()
-		// connectorLines disabled for now due to rendering issues
-		// connectorLines := gitops.RenderConnectorLines(m.graph, commitIndex, style)
-
-		if !skipCommitLine {
-			hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
-			warning := ""
-			warningWidth := 0
-			if hasWarning {
-				if highlight {
-					warning = errorStyle.Background(bg).Render(" ⚠️time")
-				} else {
-					warning = errorStyle.Render(" ⚠️time")
-				}
-				warningWidth = 7
-			}
-
-			lineWidth := m.width - 6
-			line := gitops.RenderGraphLineWithSuffix(m.graph, commitIndex, lineWidth, style, highlight, warning, warningWidth)
-			change := m.editMap[commit.Hash.String()]
-			if change != nil {
-				line = renderModifiedCommit(commit, change, lineWidth, highlight, warning, warningWidth)
-			}
-
-			selected := m.selectedCommits[commit.Hash.String()]
-			var selMarker string
-			if selected {
-				if highlight {
-					selMarker = editStyle.Background(bg).Render("[x] ")
-				} else {
-					selMarker = editStyle.Render("[x] ")
-				}
-			} else {
-				if highlight {
-					selMarker = bgStyle.Render("    ")
-				} else {
-					selMarker = "    "
-				}
-			}
-
-			var fullLine string
-			if highlight {
-				fullLine = bgStyle.Render("> ") + selMarker + line
-			} else {
-				fullLine = "  " + selMarker + line
-			}
-
-			b.WriteString(fullLine)
+		if !row.IsCommit || row.CommitIndex < 0 || row.CommitIndex >= len(m.commits) {
+			line := gitops.RenderGraphLineWithColumnWidths(m.graph, m.commits, rowIndex, lineWidth, style, false, "", 0, authorWidth, statWidth)
+			b.WriteString("      ")
+			b.WriteString(line)
 			b.WriteString("\n")
 			visualLinesRendered++
+			rowIndex++
+			continue
 		}
-		skipCommitLine = false
 
-		// connector line rendering disabled for now
-		// connectorStartIdx := 0
-		// if linesToSkip > 0 {
-		// 	connectorStartIdx = linesToSkip
-		// 	linesToSkip = 0
-		// }
-		// for i := connectorStartIdx; i < len(connectorLines) && visualLinesRendered < maxRows; i++ {
-		// 	connRow := connectorLines[i]
-		// 	if connRow == "" {
-		// 		continue
-		// 	}
-		// 	b.WriteString("      ")
-		// 	b.WriteString(connRow)
-		// 	b.WriteString("\n")
-		// 	visualLinesRendered++
-		// }
+		commitIndex := row.CommitIndex
+		commit := m.commits[commitIndex]
+		highlight := commitIndex == m.list.Index()
+		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
+		warning := ""
+		warningWidth := 0
+		if hasWarning {
+			if highlight {
+				warning = errorStyle.Background(bg).Render(" ⚠️time")
+			} else {
+				warning = errorStyle.Render(" ⚠️time")
+			}
+			warningWidth = 7
+		}
 
-		commitIndex++
+		line := gitops.RenderGraphLineWithColumnWidths(m.graph, m.commits, rowIndex, lineWidth, style, highlight, warning, warningWidth, authorWidth, statWidth)
+		change := m.editMap[commit.Hash.String()]
+		if change != nil {
+			prefixText := truncateForWidth(row.Prefix, lineWidth)
+			prefix := gitops.RenderGraphPrefix(prefixText, style, highlight)
+			commitWidth := lineWidth - len(prefixText)
+			if commitWidth < 0 {
+				commitWidth = 0
+			}
+			if change.Operation == gitops.ForgeDrop {
+				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+			} else {
+				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+			}
+		}
+
+		selected := m.selectedCommits[commit.Hash.String()]
+		var selMarker string
+		if selected {
+			if highlight {
+				selMarker = editStyle.Background(bg).Render("[x] ")
+			} else {
+				selMarker = editStyle.Render("[x] ")
+			}
+		} else {
+			if highlight {
+				selMarker = bgStyle.Render("    ")
+			} else {
+				selMarker = "    "
+			}
+		}
+
+		var fullLine string
+		if highlight {
+			fullLine = bgStyle.Render("> ") + selMarker + line
+		} else {
+			fullLine = "  " + selMarker + line
+		}
+
+		b.WriteString(fullLine)
+		b.WriteString("\n")
+		visualLinesRendered++
+		rowIndex++
 	}
 
 	var statusText string
 	if selectedCount > 0 {
-		statusText = fmt.Sprintf("space:select b:batch c:switch a:apply q:quit")
+		statusText = fmt.Sprintf("d:drop space:select b:batch c:switch a:apply q:quit")
 	} else {
-		statusText = fmt.Sprintf("e:edit space:select b:batch c:switch a:apply q:quit")
+		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
 	}
 	b.WriteString(statusStyle.Render(statusText))
 	return b.String()
@@ -1353,7 +1050,7 @@ func (m Model) renderEditView() string {
 	b.WriteString(fmt.Sprintf("%s <%s> %s",
 		m.editingCommit.AuthorName,
 		m.editingCommit.AuthorEmail,
-		m.editingCommit.AuthorDate.Format("2006-01-02 15:04:05")))
+		formatCommitTime(m.editingCommit.AuthorDate)))
 	b.WriteString("\n")
 	b.WriteString(statusStyle.Render("Original Message:"))
 	b.WriteString("\n")
@@ -1376,11 +1073,16 @@ func (m Model) renderConfirmView() string {
 
 	for i, change := range m.editQueue {
 		b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, change.OriginalHash.String()[:7]))
+		if change.Operation == gitops.ForgeDrop {
+			b.WriteString("     Operation: drop commit\n")
+			b.WriteString("\n")
+			continue
+		}
 		if change.NewAuthor != nil {
 			b.WriteString(fmt.Sprintf("     Author: %s <%s>\n", change.NewAuthor.Name, change.NewAuthor.Email))
 		}
 		if change.NewDate != nil {
-			b.WriteString(fmt.Sprintf("     Date: %s\n", change.NewDate.Format("2006-01-02 15:04:05")))
+			b.WriteString(fmt.Sprintf("     Date: %s\n", formatCommitTime(*change.NewDate)))
 		}
 		if change.NewMessage != "" {
 			fullMsg := strings.ReplaceAll(change.NewMessage, "\n", " ")
@@ -1433,9 +1135,74 @@ func (m Model) renderBranchView() string {
 	return b.String()
 }
 
-func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange, width int, highlight bool, suffix string, suffixWidth int) string {
+func (m Model) authorColumnWidth() int {
+	width := gitops.AuthorColumnWidth(m.commits)
+	for _, commit := range m.commits {
+		if change := m.editMap[commit.Hash.String()]; change != nil {
+			name := commit.AuthorName
+			if change.Operation == gitops.ForgeDrop {
+				name = "[drop] " + name
+			} else if change.NewAuthor != nil {
+				name = change.NewAuthor.Name
+				if change.NewAuthor.Email != "" {
+					name += " <" + change.NewAuthor.Email + ">"
+				}
+			}
+			if len(name) > width {
+				width = len(name)
+			}
+		}
+	}
+	return width
+}
+
+func renderDroppedCommit(original gitops.CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+	msg := strings.Split(original.Message, "\n")[0]
+	date := formatCommitTime(original.AuthorDate)
+	name := gitops.FormatCommitAuthor("[drop] "+original.AuthorName, authorWidth)
+
+	bg := lipgloss.Color("237")
+	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	sepStyle := lipgloss.NewStyle()
+
+	if highlight {
+		hashStyle = hashStyle.Background(bg)
+		nameStyle = nameStyle.Background(bg)
+		addStyle = addStyle.Background(bg)
+		delStyle = delStyle.Background(bg)
+		textStyle = textStyle.Background(bg)
+		sepStyle = sepStyle.Background(bg)
+	}
+
+	addStr := gitops.FormatCommitStat("+", original.Additions, statWidth)
+	delStr := gitops.FormatCommitStat("-", original.Deletions, statWidth)
+	staticWidth := len(original.ShortHash) + 2 + authorWidth + 2 + len(date) + 2 + statWidth + 1 + statWidth + 2
+	availableForMsg := width - staticWidth - suffixWidth
+	msg = truncateForWidth(msg, availableForMsg)
+
+	sep := sepStyle.Render("  ")
+	line := hashStyle.Render(original.ShortHash) + sep + nameStyle.Render(name) + sep + textStyle.Render(date) + sep + addStyle.Render(addStr) + " " + delStyle.Render(delStr) + sep + textStyle.Render(msg)
+
+	if highlight {
+		line += suffix
+		lineLen := staticWidth + len(msg) + suffixWidth
+		if width > lineLen {
+			line += sepStyle.Render(strings.Repeat(" ", width-lineLen))
+		}
+	} else if suffix != "" {
+		line += suffix
+	}
+
+	return line
+}
+
+func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
 	name := original.AuthorName
-	date := original.AuthorDate.In(time.Local).Format("2006-01-02 15:04")
+	date := formatCommitTime(original.AuthorDate)
 	msg := strings.Split(original.Message, "\n")[0]
 
 	if change.NewAuthor != nil {
@@ -1445,7 +1212,7 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 		}
 	}
 	if change.NewDate != nil {
-		date = change.NewDate.In(time.Local).Format("2006-01-02 15:04")
+		date = formatCommitTime(*change.NewDate)
 	}
 	if change.NewMessage != "" {
 		msg = strings.Split(change.NewMessage, "\n")[0]
@@ -1471,17 +1238,14 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	}
 
 	hashPart := hashStyle.Render(original.ShortHash)
-	namePart := nameStyle.Render(name)
+	namePart := nameStyle.Render(gitops.FormatCommitAuthor(name, authorWidth))
 	datePart := dateStyle.Render(date)
-	addPart := addStyle.Render(fmt.Sprintf("+%d", original.Additions))
-	delPart := delStyle.Render(fmt.Sprintf("-%d", original.Deletions))
+	addPart := addStyle.Render(gitops.FormatCommitStat("+", original.Additions, statWidth))
+	delPart := delStyle.Render(gitops.FormatCommitStat("-", original.Deletions, statWidth))
 
-	statsStr := fmt.Sprintf("+%d -%d", original.Additions, original.Deletions)
-	staticWidth := len(original.ShortHash) + 2 + len(name) + 2 + len(date) + 2 + len(statsStr) + 2
+	staticWidth := len(original.ShortHash) + 2 + authorWidth + 2 + len(date) + 2 + statWidth + 1 + statWidth + 2
 	availableForMsg := width - staticWidth - suffixWidth
-	if availableForMsg > 0 && len(msg) > availableForMsg {
-		msg = msg[:availableForMsg-3] + "..."
-	}
+	msg = truncateForWidth(msg, availableForMsg)
 
 	sep := sepStyle.Render("  ")
 	line := hashPart + sep + namePart + sep + datePart + sep + addPart + " " + delPart + sep + msgStyle.Render(msg)
@@ -1499,30 +1263,17 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	return line
 }
 
-func hasTimeAnomaly(commit gitops.CommitInfo, allCommits []gitops.CommitInfo, editMap map[string]*gitops.ForgeChange) bool {
-	hashToCommit := make(map[string]gitops.CommitInfo)
-	for _, c := range allCommits {
-		hashToCommit[c.Hash.String()] = c
+func truncateForWidth(value string, width int) string {
+	if width <= 0 {
+		return ""
 	}
-
-	localLoc := time.Local
-	commitDate := commit.AuthorDate.In(localLoc)
-	if change, ok := editMap[commit.Hash.String()]; ok && change.NewDate != nil {
-		commitDate = change.NewDate.In(localLoc)
+	if len(value) <= width {
+		return value
 	}
-
-	for _, parentHash := range commit.Parents {
-		if parent, ok := hashToCommit[parentHash.String()]; ok {
-			parentDate := parent.AuthorDate.In(localLoc)
-			if change, ok := editMap[parentHash.String()]; ok && change.NewDate != nil {
-				parentDate = change.NewDate.In(localLoc)
-			}
-			if commitDate.Before(parentDate) {
-				return true
-			}
-		}
+	if width <= 3 {
+		return value[:width]
 	}
-	return false
+	return value[:width-3] + "..."
 }
 
 type commitItem struct {
@@ -1548,7 +1299,7 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 	line := fmt.Sprintf("%s  %s  %s  +%d -%d  %s",
 		i.commit.ShortHash,
 		i.commit.AuthorName,
-		i.commit.AuthorDate.In(time.Local).Format("2006-01-02 15:04"),
+		formatCommitTime(i.commit.AuthorDate),
 		i.commit.Additions,
 		i.commit.Deletions,
 		strings.Split(i.commit.Message, "\n")[0],
