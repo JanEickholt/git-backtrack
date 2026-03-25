@@ -1185,7 +1185,8 @@ func renderDroppedCommit(original gitops.CommitInfo, width int, highlight bool, 
 	msg = truncateForWidth(msg, availableForMsg)
 
 	sep := sepStyle.Render("  ")
-	line := hashStyle.Render(original.ShortHash) + sep + nameStyle.Render(name) + sep + textStyle.Render(date) + sep + addStyle.Render(addStr) + " " + delStyle.Render(delStr) + sep + textStyle.Render(msg)
+	statSep := sepStyle.Render(" ")
+	line := hashStyle.Render(original.ShortHash) + sep + nameStyle.Render(name) + sep + textStyle.Render(date) + sep + addStyle.Render(addStr) + statSep + delStyle.Render(delStr) + sep + textStyle.Render(msg)
 
 	if highlight {
 		line += suffix
@@ -1248,7 +1249,8 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	msg = truncateForWidth(msg, availableForMsg)
 
 	sep := sepStyle.Render("  ")
-	line := hashPart + sep + namePart + sep + datePart + sep + addPart + " " + delPart + sep + msgStyle.Render(msg)
+	statSep := sepStyle.Render(" ")
+	line := hashPart + sep + namePart + sep + datePart + sep + addPart + statSep + delPart + sep + msgStyle.Render(msg)
 
 	if highlight {
 		line += suffix

@@ -213,12 +213,13 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	message = truncateForWidth(message, availableForMsg)
 
 	sep := sepStyle.Render("  ")
+	statSep := sepStyle.Render(" ")
 	addPart := addStyle.Render(addStr)
 	delPart := delStyle.Render(delStr)
 	line := hashStyle.Render(commit.ShortHash) + sep +
 		authorStyle.Render(authorStr) + sep +
 		dateStyle.Render(dateStr) + sep +
-		addPart + " " + delPart + sep +
+		addPart + statSep + delPart + sep +
 		msgStyle.Render(message)
 
 	if highlight {
