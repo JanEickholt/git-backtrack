@@ -32,6 +32,45 @@ func (m *Model) removeChange(hash string) {
 	m.rebuildEditMap()
 }
 
+func (m Model) selectedCommitInfos() []gitops.CommitInfo {
+	selected := make([]gitops.CommitInfo, 0)
+	for _, commit := range m.commits {
+		if m.selectedCommits[commit.Hash.String()] {
+			selected = append(selected, commit)
+		}
+	}
+	return selected
+}
+
+func (m *Model) toggleDropForCommits(commits []gitops.CommitInfo) {
+	if len(commits) == 0 {
+		return
+	}
+
+	allDropped := true
+	for _, commit := range commits {
+		change := m.editMap[commit.Hash.String()]
+		if change == nil || change.Operation != gitops.ForgeDrop {
+			allDropped = false
+			break
+		}
+	}
+
+	for _, commit := range commits {
+		hash := commit.Hash.String()
+		if allDropped {
+			if change := m.editMap[hash]; change != nil && change.Operation == gitops.ForgeDrop {
+				m.removeChange(hash)
+			}
+			continue
+		}
+		m.setChange(gitops.ForgeChange{
+			OriginalHash: commit.Hash,
+			Operation:    gitops.ForgeDrop,
+		})
+	}
+}
+
 func (m *Model) rebuildEditMap() {
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	for i := range m.editQueue {

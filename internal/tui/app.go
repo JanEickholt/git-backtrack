@@ -208,18 +208,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.commits) == 0 {
 			return m, nil
 		}
+		selectedCommits := m.selectedCommitInfos()
+		if len(selectedCommits) > 0 {
+			m.toggleDropForCommits(selectedCommits)
+			return m, nil
+		}
 		idx := m.list.Index()
 		if idx >= 0 && idx < len(m.commits) {
-			commit := m.commits[idx]
-			hash := commit.Hash.String()
-			if existing := m.editMap[hash]; existing != nil && existing.Operation == gitops.ForgeDrop {
-				m.removeChange(hash)
-			} else {
-				m.setChange(gitops.ForgeChange{
-					OriginalHash: commit.Hash,
-					Operation:    gitops.ForgeDrop,
-				})
-			}
+			m.toggleDropForCommits([]gitops.CommitInfo{m.commits[idx]})
 		}
 		return m, nil
 
