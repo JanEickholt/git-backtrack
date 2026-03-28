@@ -34,6 +34,7 @@ type ForgeOperation int
 const (
 	ForgeEdit ForgeOperation = iota
 	ForgeDrop
+	ForgeCombine
 )
 
 type ForgeChange struct {
@@ -42,6 +43,7 @@ type ForgeChange struct {
 	NewAuthor    *AuthorInfo
 	NewMessage   string
 	NewDate      *time.Time
+	CombineGroup []plumbing.Hash
 }
 
 func (c ForgeChange) HasChanges() bool {

@@ -219,6 +219,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Combine):
+		selectedCommits := m.selectedCommitInfos()
+		if len(selectedCommits) < 2 {
+			return m, nil
+		}
+		m.toggleCombineForCommits(selectedCommits)
+		return m, nil
+
 	case key.Matches(msg, m.keys.BatchEdit):
 		selectedCount := 0
 		for _, v := range m.selectedCommits {
@@ -568,7 +576,7 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 		// Start with existing change if any, otherwise create new
 		var change gitops.ForgeChange
 		existingChange := m.editMap[hashStr]
-		if existingChange != nil && existingChange.Operation == gitops.ForgeDrop {
+		if existingChange != nil && (existingChange.Operation == gitops.ForgeDrop || existingChange.Operation == gitops.ForgeCombine) {
 			continue
 		}
 		if existingChange != nil {
@@ -914,6 +922,8 @@ func (m Model) renderListView() string {
 			}
 			if change.Operation == gitops.ForgeDrop {
 				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+			} else if change.Operation == gitops.ForgeCombine {
+				line = prefix + renderCombinedCommit(commit, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
 			} else {
 				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
 			}
@@ -950,7 +960,7 @@ func (m Model) renderListView() string {
 
 	var statusText string
 	if selectedCount > 0 {
-		statusText = fmt.Sprintf("d:drop space:select b:batch c:switch a:apply q:quit")
+		statusText = fmt.Sprintf("d:drop f:fold space:select b:batch c:switch a:apply q:quit")
 	} else {
 		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
 	}
@@ -1074,6 +1084,11 @@ func (m Model) renderConfirmView() string {
 			b.WriteString("\n")
 			continue
 		}
+		if change.Operation == gitops.ForgeCombine {
+			b.WriteString(fmt.Sprintf("     Operation: fold into %d-commit group\n", len(change.CombineGroup)))
+			b.WriteString("\n")
+			continue
+		}
 		if change.NewAuthor != nil {
 			b.WriteString(fmt.Sprintf("     Author: %s <%s>\n", change.NewAuthor.Name, change.NewAuthor.Email))
 		}
@@ -1138,6 +1153,8 @@ func (m Model) authorColumnWidth() int {
 			name := commit.AuthorName
 			if change.Operation == gitops.ForgeDrop {
 				name = "[drop] " + name
+			} else if change.Operation == gitops.ForgeCombine {
+				name = "[fold] " + name
 			} else if change.NewAuthor != nil {
 				name = change.NewAuthor.Name
 				if change.NewAuthor.Email != "" {
@@ -1153,13 +1170,21 @@ func (m Model) authorColumnWidth() int {
 }
 
 func renderDroppedCommit(original gitops.CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+	return renderTaggedCommit(original, "[drop] ", lipgloss.Color("9"), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+}
+
+func renderCombinedCommit(original gitops.CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+	return renderTaggedCommit(original, "[fold] ", lipgloss.Color("11"), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+}
+
+func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.Color, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
 	msg := strings.Split(original.Message, "\n")[0]
 	date := formatCommitTime(original.AuthorDate)
-	name := gitops.FormatCommitAuthor("[drop] "+original.AuthorName, authorWidth)
+	name := gitops.FormatCommitAuthor(tag+original.AuthorName, authorWidth)
 
 	bg := lipgloss.Color("237")
-	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
+	hashStyle := lipgloss.NewStyle().Foreground(color).Bold(true)
+	nameStyle := lipgloss.NewStyle().Foreground(color).Bold(true)
 	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))

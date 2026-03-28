@@ -111,3 +111,39 @@ func TestToggleDropForCommitsReplacesMixedChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestToggleCombineForCommitsMarksAndUnmarksBatch(t *testing.T) {
+	first := plumbing.NewHash("1111111111111111111111111111111111111111")
+	second := plumbing.NewHash("2222222222222222222222222222222222222222")
+	commits := []gitops.CommitInfo{{Hash: first}, {Hash: second}}
+	model := Model{}
+
+	model.toggleCombineForCommits(commits)
+	if len(model.editQueue) != 2 {
+		t.Fatalf("editQueue len after fold = %d, want 2", len(model.editQueue))
+	}
+	for _, commit := range commits {
+		change := model.editMap[commit.Hash.String()]
+		if change == nil || change.Operation != gitops.ForgeCombine {
+			t.Fatalf("commit %s was not marked fold", commit.Hash)
+		}
+		if len(change.CombineGroup) != 2 || change.CombineGroup[0] != first || change.CombineGroup[1] != second {
+			t.Fatalf("combine group = %v, want [%s %s]", change.CombineGroup, first, second)
+		}
+	}
+
+	model.toggleCombineForCommits(commits)
+	if len(model.editQueue) != 0 {
+		t.Fatalf("editQueue len after unmark = %d, want 0", len(model.editQueue))
+	}
+}
+
+func TestToggleCombineForCommitsRequiresMultipleCommits(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	model := Model{}
+
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: hash}})
+	if len(model.editQueue) != 0 {
+		t.Fatalf("editQueue len = %d, want 0", len(model.editQueue))
+	}
+}

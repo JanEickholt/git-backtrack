@@ -1,6 +1,11 @@
 package tui
 
-import "github.com/Jan/git-backtrack/internal/gitops"
+import (
+	"slices"
+
+	"github.com/Jan/git-backtrack/internal/gitops"
+	"github.com/go-git/go-git/v5/plumbing"
+)
 
 func (m *Model) setChange(change gitops.ForgeChange) {
 	if m.editMap == nil {
@@ -67,6 +72,41 @@ func (m *Model) toggleDropForCommits(commits []gitops.CommitInfo) {
 		m.setChange(gitops.ForgeChange{
 			OriginalHash: commit.Hash,
 			Operation:    gitops.ForgeDrop,
+		})
+	}
+}
+
+func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo) {
+	if len(commits) < 2 {
+		return
+	}
+
+	combineGroup := make([]plumbing.Hash, len(commits))
+	for i, commit := range commits {
+		combineGroup[i] = commit.Hash
+	}
+
+	allCombined := true
+	for _, commit := range commits {
+		change := m.editMap[commit.Hash.String()]
+		if change == nil || change.Operation != gitops.ForgeCombine || !slices.Equal(change.CombineGroup, combineGroup) {
+			allCombined = false
+			break
+		}
+	}
+
+	for _, commit := range commits {
+		hash := commit.Hash.String()
+		if allCombined {
+			if change := m.editMap[hash]; change != nil && change.Operation == gitops.ForgeCombine {
+				m.removeChange(hash)
+			}
+			continue
+		}
+		m.setChange(gitops.ForgeChange{
+			OriginalHash: commit.Hash,
+			Operation:    gitops.ForgeCombine,
+			CombineGroup: append([]plumbing.Hash(nil), combineGroup...),
 		})
 	}
 }

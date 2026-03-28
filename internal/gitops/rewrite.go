@@ -20,7 +20,7 @@ func (hr *HistoryRewriter) ApplyChanges(changes []ForgeChange) (*RewriteResult, 
 		return &RewriteResult{}, nil
 	}
 
-	if hasDropOperation(changes) {
+	if hasReplayOperation(changes) {
 		return hr.applyChangesWithDrop(changes)
 	}
 
