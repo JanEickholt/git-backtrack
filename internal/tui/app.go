@@ -877,7 +877,8 @@ func (m Model) renderListView() string {
 	bg := lipgloss.Color("237")
 	bgStyle := lipgloss.NewStyle().Background(bg)
 	style := gitops.DefaultGraphStyle()
-	authorWidth := m.authorColumnWidth()
+	folds := m.foldDisplayIndex()
+	authorWidth := m.authorColumnWidth(folds)
 	statWidth := gitops.StatColumnWidth(m.commits)
 
 	visualLinesRendered := 0
@@ -923,7 +924,8 @@ func (m Model) renderListView() string {
 			if change.Operation == gitops.ForgeDrop {
 				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
 			} else if change.Operation == gitops.ForgeCombine {
-				line = prefix + renderCombinedCommit(commit, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				fold := folds.ByHash[commit.Hash.String()]
+				line = prefix + renderCombinedCommit(commit, fold, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
 			} else {
 				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
 			}
@@ -1072,21 +1074,33 @@ func (m Model) renderEditView() string {
 
 func (m Model) renderConfirmView() string {
 	var b strings.Builder
+	folds := m.foldDisplayIndex()
+	renderedFolds := make(map[int]bool)
+	itemIndex := 1
 
 	b.WriteString(titleStyle.Render("Confirm Changes"))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf("About to rewrite %d commits:\n\n", len(m.editQueue)))
 
-	for i, change := range m.editQueue {
-		b.WriteString(fmt.Sprintf("  %d. %s\n", i+1, change.OriginalHash.String()[:7]))
+	for _, change := range m.editQueue {
+		if change.Operation == gitops.ForgeCombine {
+			fold := folds.ByHash[change.OriginalHash.String()]
+			if renderedFolds[fold.ID] {
+				continue
+			}
+			renderedFolds[fold.ID] = true
+			b.WriteString(fmt.Sprintf("  %d. Fold %d: %s\n", itemIndex, fold.ID, shortHashList(fold.Hashes)))
+			b.WriteString(fmt.Sprintf("     Operation: fold %d commits into one\n", len(fold.Hashes)))
+			b.WriteString("\n")
+			itemIndex++
+			continue
+		}
+
+		b.WriteString(fmt.Sprintf("  %d. %s\n", itemIndex, change.OriginalHash.String()[:7]))
 		if change.Operation == gitops.ForgeDrop {
 			b.WriteString("     Operation: drop commit\n")
 			b.WriteString("\n")
-			continue
-		}
-		if change.Operation == gitops.ForgeCombine {
-			b.WriteString(fmt.Sprintf("     Operation: fold into %d-commit group\n", len(change.CombineGroup)))
-			b.WriteString("\n")
+			itemIndex++
 			continue
 		}
 		if change.NewAuthor != nil {
@@ -1100,6 +1114,7 @@ func (m Model) renderConfirmView() string {
 			b.WriteString(fmt.Sprintf("     Message: %s\n", fullMsg))
 		}
 		b.WriteString("\n")
+		itemIndex++
 	}
 
 	b.WriteString(errorStyle.Render("This will rewrite git history!"))
@@ -1146,7 +1161,7 @@ func (m Model) renderBranchView() string {
 	return b.String()
 }
 
-func (m Model) authorColumnWidth() int {
+func (m Model) authorColumnWidth(folds foldDisplayIndex) int {
 	width := gitops.AuthorColumnWidth(m.commits)
 	for _, commit := range m.commits {
 		if change := m.editMap[commit.Hash.String()]; change != nil {
@@ -1154,7 +1169,7 @@ func (m Model) authorColumnWidth() int {
 			if change.Operation == gitops.ForgeDrop {
 				name = "[drop] " + name
 			} else if change.Operation == gitops.ForgeCombine {
-				name = "[fold] " + name
+				name = folds.ByHash[commit.Hash.String()].Label + name
 			} else if change.NewAuthor != nil {
 				name = change.NewAuthor.Name
 				if change.NewAuthor.Email != "" {
@@ -1173,8 +1188,16 @@ func renderDroppedCommit(original gitops.CommitInfo, width int, highlight bool, 
 	return renderTaggedCommit(original, "[drop] ", lipgloss.Color("9"), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
 }
 
-func renderCombinedCommit(original gitops.CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
-	return renderTaggedCommit(original, "[fold] ", lipgloss.Color("11"), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+func renderCombinedCommit(original gitops.CommitInfo, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+	label := fold.Label
+	color := fold.Color
+	if label == "" {
+		label = "[fold] "
+	}
+	if color == "" {
+		color = "11"
+	}
+	return renderTaggedCommit(original, label, lipgloss.Color(color), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
 }
 
 func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.Color, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {

@@ -147,3 +147,45 @@ func TestToggleCombineForCommitsRequiresMultipleCommits(t *testing.T) {
 		t.Fatalf("editQueue len = %d, want 0", len(model.editQueue))
 	}
 }
+
+func TestFoldDisplayIndexAssignsStableIDsByCommitOrder(t *testing.T) {
+	first := plumbing.NewHash("1111111111111111111111111111111111111111")
+	second := plumbing.NewHash("2222222222222222222222222222222222222222")
+	third := plumbing.NewHash("3333333333333333333333333333333333333333")
+	fourth := plumbing.NewHash("4444444444444444444444444444444444444444")
+	model := Model{
+		commits: []gitops.CommitInfo{
+			{Hash: first},
+			{Hash: second},
+			{Hash: third},
+			{Hash: fourth},
+		},
+	}
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: third}, {Hash: fourth}})
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: first}, {Hash: second}})
+
+	folds := model.foldDisplayIndex()
+	if len(folds.Groups) != 2 {
+		t.Fatalf("groups len = %d, want 2", len(folds.Groups))
+	}
+	if folds.ByHash[first.String()].Label != "[fold 1] " {
+		t.Fatalf("first label = %q, want [fold 1]", folds.ByHash[first.String()].Label)
+	}
+	if folds.ByHash[third.String()].Label != "[fold 2] " {
+		t.Fatalf("third label = %q, want [fold 2]", folds.ByHash[third.String()].Label)
+	}
+	if folds.ByHash[first.String()].Color == folds.ByHash[third.String()].Color {
+		t.Fatalf("fold colors should differ")
+	}
+}
+
+func TestShortHashList(t *testing.T) {
+	first := plumbing.NewHash("1111111111111111111111111111111111111111")
+	second := plumbing.NewHash("2222222222222222222222222222222222222222")
+
+	got := shortHashList([]plumbing.Hash{first, second})
+	want := "1111111, 2222222"
+	if got != want {
+		t.Fatalf("shortHashList = %q, want %q", got, want)
+	}
+}

@@ -1,11 +1,27 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/Jan/git-backtrack/internal/gitops"
 	"github.com/go-git/go-git/v5/plumbing"
 )
+
+var foldColors = []string{"11", "13", "10", "12", "14", "9"}
+
+type foldDisplay struct {
+	ID     int
+	Label  string
+	Color  string
+	Hashes []plumbing.Hash
+}
+
+type foldDisplayIndex struct {
+	ByHash map[string]foldDisplay
+	Groups []foldDisplay
+}
 
 func (m *Model) setChange(change gitops.ForgeChange) {
 	if m.editMap == nil {
@@ -111,9 +127,68 @@ func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo) {
 	}
 }
 
+func (m Model) foldDisplayIndex() foldDisplayIndex {
+	index := foldDisplayIndex{ByHash: make(map[string]foldDisplay)}
+	seen := make(map[string]bool)
+
+	addGroup := func(change *gitops.ForgeChange) {
+		if change == nil || change.Operation != gitops.ForgeCombine {
+			return
+		}
+		hashes := append([]plumbing.Hash(nil), change.CombineGroup...)
+		if len(hashes) == 0 {
+			hashes = []plumbing.Hash{change.OriginalHash}
+		}
+		key := combineGroupKey(hashes)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+
+		id := len(index.Groups) + 1
+		group := foldDisplay{
+			ID:     id,
+			Label:  fmt.Sprintf("[fold %d] ", id),
+			Color:  foldColors[(id-1)%len(foldColors)],
+			Hashes: hashes,
+		}
+		index.Groups = append(index.Groups, group)
+		for _, hash := range hashes {
+			if _, ok := index.ByHash[hash.String()]; !ok {
+				index.ByHash[hash.String()] = group
+			}
+		}
+	}
+
+	for _, commit := range m.commits {
+		addGroup(m.editMap[commit.Hash.String()])
+	}
+	for i := range m.editQueue {
+		addGroup(&m.editQueue[i])
+	}
+
+	return index
+}
+
 func (m *Model) rebuildEditMap() {
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	for i := range m.editQueue {
 		m.editMap[m.editQueue[i].OriginalHash.String()] = &m.editQueue[i]
 	}
+}
+
+func combineGroupKey(hashes []plumbing.Hash) string {
+	parts := make([]string, len(hashes))
+	for i, hash := range hashes {
+		parts[i] = hash.String()
+	}
+	return strings.Join(parts, ",")
+}
+
+func shortHashList(hashes []plumbing.Hash) string {
+	parts := make([]string, len(hashes))
+	for i, hash := range hashes {
+		parts[i] = hash.String()[:7]
+	}
+	return strings.Join(parts, ", ")
 }
