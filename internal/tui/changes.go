@@ -92,7 +92,7 @@ func (m *Model) toggleDropForCommits(commits []gitops.CommitInfo) {
 	}
 }
 
-func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo) {
+func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo, anchor plumbing.Hash) {
 	if len(commits) < 2 {
 		return
 	}
@@ -101,11 +101,14 @@ func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo) {
 	for i, commit := range commits {
 		combineGroup[i] = commit.Hash
 	}
+	if !slices.Contains(combineGroup, anchor) {
+		return
+	}
 
 	allCombined := true
 	for _, commit := range commits {
 		change := m.editMap[commit.Hash.String()]
-		if change == nil || change.Operation != gitops.ForgeCombine || !slices.Equal(change.CombineGroup, combineGroup) {
+		if change == nil || change.Operation != gitops.ForgeCombine || !slices.Equal(change.CombineGroup, combineGroup) || change.CombineAnchor != anchor {
 			allCombined = false
 			break
 		}
@@ -120,9 +123,10 @@ func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo) {
 			continue
 		}
 		m.setChange(gitops.ForgeChange{
-			OriginalHash: commit.Hash,
-			Operation:    gitops.ForgeCombine,
-			CombineGroup: append([]plumbing.Hash(nil), combineGroup...),
+			OriginalHash:  commit.Hash,
+			Operation:     gitops.ForgeCombine,
+			CombineGroup:  append([]plumbing.Hash(nil), combineGroup...),
+			CombineAnchor: anchor,
 		})
 	}
 }

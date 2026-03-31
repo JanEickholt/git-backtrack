@@ -14,6 +14,7 @@ import (
 type combineGroup struct {
 	Leader plumbing.Hash
 	Hashes []plumbing.Hash
+	Anchor plumbing.Hash
 }
 
 func hasReplayOperation(changes []ForgeChange) bool {
@@ -167,6 +168,10 @@ func buildCombineGroups(changes []ForgeChange, commits []*object.Commit) (map[pl
 		}
 
 		hashes := append([]plumbing.Hash(nil), change.CombineGroup...)
+		anchor := change.CombineAnchor
+		if anchor == plumbing.ZeroHash {
+			anchor = change.OriginalHash
+		}
 		if len(hashes) == 0 {
 			hashes = []plumbing.Hash{change.OriginalHash}
 		}
@@ -180,6 +185,12 @@ func buildCombineGroups(changes []ForgeChange, commits []*object.Commit) (map[pl
 			if _, ok := commitIndex[hash]; !ok {
 				return nil, nil, fmt.Errorf("combined commit %s is not reachable from HEAD", hash.String()[:7])
 			}
+		}
+		if _, ok := commitIndex[anchor]; !ok {
+			return nil, nil, fmt.Errorf("fold anchor commit %s is not reachable from HEAD", anchor.String()[:7])
+		}
+		if !containsHash(hashes, anchor) {
+			return nil, nil, fmt.Errorf("fold anchor commit %s is not part of its fold group", anchor.String()[:7])
 		}
 
 		sort.Slice(hashes, func(i, j int) bool {
@@ -202,7 +213,7 @@ func buildCombineGroups(changes []ForgeChange, commits []*object.Commit) (map[pl
 			}
 			members[hash] = leader
 		}
-		groups[leader] = combineGroup{Leader: leader, Hashes: hashes}
+		groups[leader] = combineGroup{Leader: leader, Hashes: hashes, Anchor: anchor}
 	}
 
 	return groups, members, nil
@@ -221,11 +232,15 @@ func (hr *HistoryRewriter) replayCombinedCommit(dir string, group combineGroup, 
 		groupCommits = append(groupCommits, commit)
 	}
 
-	messageFile, err := hr.writeCombinedMessage(dir, groupCommits, change, hasChange)
+	anchorCommit := commitByHash[group.Anchor]
+	if anchorCommit == nil {
+		anchorCommit = groupCommits[0]
+	}
+	messageFile, err := hr.writeReplayMessage(dir, anchorCommit, change, hasChange)
 	if err != nil {
 		return err
 	}
-	env := replayCommitEnv(groupCommits[0], change, hasChange)
+	env := replayCommitEnv(anchorCommit, change, hasChange)
 	if err := hr.runGitEnv(dir, env, "commit", "--allow-empty", "-F", messageFile); err != nil {
 		return fmt.Errorf("failed to create combined commit %s: %w", group.Leader.String()[:7], err)
 	}
@@ -263,21 +278,6 @@ func (hr *HistoryRewriter) writeReplayMessage(dir string, commit *object.Commit,
 		message = change.NewMessage
 	}
 	return writeMessageFile(dir, message)
-}
-
-func (hr *HistoryRewriter) writeCombinedMessage(dir string, commits []*object.Commit, change ForgeChange, hasChange bool) (string, error) {
-	if hasChange && change.NewMessage != "" {
-		return writeMessageFile(dir, change.NewMessage)
-	}
-
-	messages := make([]string, 0, len(commits))
-	for _, commit := range commits {
-		message := strings.TrimRight(commit.Message, "\n")
-		if message != "" {
-			messages = append(messages, message)
-		}
-	}
-	return writeMessageFile(dir, strings.Join(messages, "\n\n"))
 }
 
 func writeMessageFile(dir string, message string) (string, error) {

@@ -118,7 +118,7 @@ func TestToggleCombineForCommitsMarksAndUnmarksBatch(t *testing.T) {
 	commits := []gitops.CommitInfo{{Hash: first}, {Hash: second}}
 	model := Model{}
 
-	model.toggleCombineForCommits(commits)
+	model.toggleCombineForCommits(commits, second)
 	if len(model.editQueue) != 2 {
 		t.Fatalf("editQueue len after fold = %d, want 2", len(model.editQueue))
 	}
@@ -130,9 +130,12 @@ func TestToggleCombineForCommitsMarksAndUnmarksBatch(t *testing.T) {
 		if len(change.CombineGroup) != 2 || change.CombineGroup[0] != first || change.CombineGroup[1] != second {
 			t.Fatalf("combine group = %v, want [%s %s]", change.CombineGroup, first, second)
 		}
+		if change.CombineAnchor != second {
+			t.Fatalf("combine anchor = %s, want %s", change.CombineAnchor, second)
+		}
 	}
 
-	model.toggleCombineForCommits(commits)
+	model.toggleCombineForCommits(commits, second)
 	if len(model.editQueue) != 0 {
 		t.Fatalf("editQueue len after unmark = %d, want 0", len(model.editQueue))
 	}
@@ -142,7 +145,19 @@ func TestToggleCombineForCommitsRequiresMultipleCommits(t *testing.T) {
 	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
 	model := Model{}
 
-	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: hash}})
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: hash}}, hash)
+	if len(model.editQueue) != 0 {
+		t.Fatalf("editQueue len = %d, want 0", len(model.editQueue))
+	}
+}
+
+func TestToggleCombineForCommitsRequiresAnchorInGroup(t *testing.T) {
+	first := plumbing.NewHash("1111111111111111111111111111111111111111")
+	second := plumbing.NewHash("2222222222222222222222222222222222222222")
+	third := plumbing.NewHash("3333333333333333333333333333333333333333")
+	model := Model{}
+
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: first}, {Hash: second}}, third)
 	if len(model.editQueue) != 0 {
 		t.Fatalf("editQueue len = %d, want 0", len(model.editQueue))
 	}
@@ -161,8 +176,8 @@ func TestFoldDisplayIndexAssignsStableIDsByCommitOrder(t *testing.T) {
 			{Hash: fourth},
 		},
 	}
-	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: third}, {Hash: fourth}})
-	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: first}, {Hash: second}})
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: third}, {Hash: fourth}}, third)
+	model.toggleCombineForCommits([]gitops.CommitInfo{{Hash: first}, {Hash: second}}, first)
 
 	folds := model.foldDisplayIndex()
 	if len(folds.Groups) != 2 {

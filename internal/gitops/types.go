@@ -38,12 +38,13 @@ const (
 )
 
 type ForgeChange struct {
-	OriginalHash plumbing.Hash
-	Operation    ForgeOperation
-	NewAuthor    *AuthorInfo
-	NewMessage   string
-	NewDate      *time.Time
-	CombineGroup []plumbing.Hash
+	OriginalHash  plumbing.Hash
+	Operation     ForgeOperation
+	NewAuthor     *AuthorInfo
+	NewMessage    string
+	NewDate       *time.Time
+	CombineGroup  []plumbing.Hash
+	CombineAnchor plumbing.Hash
 }
 
 func (c ForgeChange) HasChanges() bool {

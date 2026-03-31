@@ -224,7 +224,11 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(selectedCommits) < 2 {
 			return m, nil
 		}
-		m.toggleCombineForCommits(selectedCommits)
+		idx := m.list.Index()
+		if idx < 0 || idx >= len(m.commits) || !m.selectedCommits[m.commits[idx].Hash.String()] {
+			return m, nil
+		}
+		m.toggleCombineForCommits(selectedCommits, m.commits[idx].Hash)
 		return m, nil
 
 	case key.Matches(msg, m.keys.BatchEdit):

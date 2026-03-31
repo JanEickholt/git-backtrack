@@ -105,9 +105,9 @@ func TestApplyChangesCombinesCommits(t *testing.T) {
 	dir := initGitRepo(t)
 
 	commitFile(t, dir, "base.txt", "base\n", "base")
-	commitFile(t, dir, "one.txt", "one\n", "one")
+	commitFileAt(t, dir, "one.txt", "one\n", "one", "2024-01-01T01:00:00Z")
 	firstHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
-	commitFile(t, dir, "two.txt", "two\n", "two")
+	commitFileAt(t, dir, "two.txt", "two\n", "two", "2024-01-01T02:00:00Z")
 	secondHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
 	commitFile(t, dir, "three.txt", "three\n", "three")
 
@@ -119,8 +119,8 @@ func TestApplyChangesCombinesCommits(t *testing.T) {
 	group := []plumbing.Hash{plumbing.NewHash(firstHash), plumbing.NewHash(secondHash)}
 
 	result, err := rewriter.ApplyChanges([]ForgeChange{
-		{OriginalHash: group[0], Operation: ForgeCombine, CombineGroup: group},
-		{OriginalHash: group[1], Operation: ForgeCombine, CombineGroup: group},
+		{OriginalHash: group[0], Operation: ForgeCombine, CombineGroup: group, CombineAnchor: group[1]},
+		{OriginalHash: group[1], Operation: ForgeCombine, CombineGroup: group, CombineAnchor: group[1]},
 	})
 	if err != nil {
 		t.Fatalf("apply changes: %v", err)
@@ -137,12 +137,19 @@ func TestApplyChangesCombinesCommits(t *testing.T) {
 		t.Fatalf("commit count = %s, want 3", count)
 	}
 	logSubjects := gitOutput(t, dir, "log", "--format=%s")
-	if !strings.Contains(logSubjects, "three") || !strings.Contains(logSubjects, "one") || !strings.Contains(logSubjects, "base") {
+	if !strings.Contains(logSubjects, "three") || !strings.Contains(logSubjects, "two") || !strings.Contains(logSubjects, "base") {
 		t.Fatalf("combined log missing expected subjects:\n%s", logSubjects)
 	}
+	if strings.Contains(logSubjects, "one") {
+		t.Fatalf("combined log should use anchor message, got:\n%s", logSubjects)
+	}
 	combinedMessage := gitOutput(t, dir, "log", "-1", "--format=%B", "HEAD~1")
-	if !strings.Contains(combinedMessage, "one") || !strings.Contains(combinedMessage, "two") {
-		t.Fatalf("combined message missing original messages:\n%s", combinedMessage)
+	if strings.TrimSpace(combinedMessage) != "two" {
+		t.Fatalf("combined message = %q, want %q", strings.TrimSpace(combinedMessage), "two")
+	}
+	combinedDate := strings.TrimSpace(gitOutput(t, dir, "log", "-1", "--format=%aI", "HEAD~1"))
+	if combinedDate != "2024-01-01T02:00:00Z" {
+		t.Fatalf("combined date = %q, want anchor date", combinedDate)
 	}
 	for _, name := range []string{"one.txt", "two.txt", "three.txt"} {
 		if _, err := gitOutputErr(dir, "cat-file", "-e", "HEAD:"+name); err != nil {
@@ -162,6 +169,10 @@ func initGitRepo(t *testing.T) string {
 }
 
 func commitFile(t *testing.T, dir, name, content, message string) {
+	commitFileAt(t, dir, name, content, message, "2024-01-01T00:00:00Z")
+}
+
+func commitFileAt(t *testing.T, dir, name, content, message, date string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -175,10 +186,10 @@ func commitFile(t *testing.T, dir, name, content, message string) {
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=Test User",
 		"GIT_AUTHOR_EMAIL=test@example.com",
-		"GIT_AUTHOR_DATE=2024-01-01T00:00:00Z",
+		"GIT_AUTHOR_DATE="+date,
 		"GIT_COMMITTER_NAME=Test User",
 		"GIT_COMMITTER_EMAIL=test@example.com",
-		"GIT_COMMITTER_DATE=2024-01-01T00:00:00Z",
+		"GIT_COMMITTER_DATE="+date,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %s: %v", strings.TrimSpace(string(output)), err)
