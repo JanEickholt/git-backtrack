@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jan/git-backtrack/internal/gitops"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -202,5 +204,25 @@ func TestShortHashList(t *testing.T) {
 	want := "1111111, 2222222"
 	if got != want {
 		t.Fatalf("shortHashList = %q, want %q", got, want)
+	}
+}
+
+func TestRenderCleanCommitUsesSingleSpacing(t *testing.T) {
+	commit := gitops.CommitInfo{
+		Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:  "1111111",
+		AuthorName: "Jan",
+		AuthorDate: time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC),
+		Additions:  8,
+		Deletions:  12,
+		Message:    "message",
+	}
+
+	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0)
+	if !strings.Contains(line, "1111111 Jan 2024-01-02 03:04 +0000 +8 -12 message") {
+		t.Fatalf("clean line has unexpected spacing: %q", line)
+	}
+	if strings.Contains(line, "   +8") {
+		t.Fatalf("clean line contains padded stats: %q", line)
 	}
 }

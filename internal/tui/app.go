@@ -56,19 +56,28 @@ type Model struct {
 	batchFields []textinput.Model
 	batchFocus  int
 
-	result *gitops.RewriteResult
-	err    error
-	list   list.Model
-	help   help.Model
-	width  int
-	height int
-	keys   keyMap
+	result  *gitops.RewriteResult
+	err     error
+	list    list.Model
+	help    help.Model
+	width   int
+	height  int
+	keys    keyMap
+	options Options
 
 	currentBranch string
 	branchList    list.Model
 }
 
+type Options struct {
+	CleanView bool
+}
+
 func NewModel(repo *gitops.Repository) Model {
+	return NewModelWithOptions(repo, Options{})
+}
+
+func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 	headRef, _ := repo.GetHead()
 	currentBranch := ""
 	if headRef != nil && headRef.Name().IsBranch() {
@@ -79,15 +88,25 @@ func NewModel(repo *gitops.Repository) Model {
 	var graph *gitops.Graph
 	var err error
 	if currentBranch != "" {
-		commits, graph, err = repo.ListCommitsFromRefWithGraph("refs/heads/" + currentBranch)
+		if options.CleanView {
+			commits, err = repo.ListCommitsFromRef("refs/heads/" + currentBranch)
+		} else {
+			commits, graph, err = repo.ListCommitsFromRefWithGraph("refs/heads/" + currentBranch)
+		}
+	} else if options.CleanView {
+		commits, err = repo.ListAllCommits()
 	} else {
 		commits, graph, err = repo.ListAllCommitsWithGraph()
+	}
+	if graph == nil {
+		graph = &gitops.Graph{}
 	}
 	if err != nil {
 		return Model{
 			err:             err,
 			commits:         []gitops.CommitInfo{},
 			graph:           &gitops.Graph{},
+			options:         options,
 			editQueue:       make([]gitops.ForgeChange, 0),
 			editMap:         make(map[string]*gitops.ForgeChange),
 			selectedCommits: make(map[string]bool),
@@ -130,6 +149,7 @@ func NewModel(repo *gitops.Repository) Model {
 		selectedCommits: make(map[string]bool),
 		help:            help.New(),
 		keys:            defaultKeyMap(),
+		options:         options,
 		list:            l,
 		currentBranch:   currentBranch,
 		branchList:      bl,
@@ -277,6 +297,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	selectedIndex := m.list.Index()
 
+	if m.options.CleanView {
+		m.scrollOffset = scrollOffsetForSelectedIndex(len(m.commits), selectedIndex, m.scrollOffset, maxRows)
+		return m, cmd
+	}
 	if m.graph == nil {
 		return m, cmd
 	}
@@ -799,12 +823,21 @@ func (m *Model) refresh() {
 	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
-		commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
+		if m.options.CleanView {
+			commits, err = m.repo.ListCommitsFromRef("refs/heads/" + m.currentBranch)
+		} else {
+			commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
+		}
+	} else if m.options.CleanView {
+		commits, err = m.repo.ListAllCommits()
 	} else {
 		commits, graph, err = m.repo.ListAllCommitsWithGraph()
 	}
 	if err != nil {
 		return
+	}
+	if graph == nil {
+		graph = &gitops.Graph{}
 	}
 	m.commits = commits
 	m.graph = graph
@@ -848,7 +881,7 @@ func (m Model) renderListView() string {
 	if len(m.commits) == 0 {
 		return statusStyle.Render("No commits found in repository")
 	}
-	if m.graph == nil || len(m.graph.Rows) == 0 {
+	if !m.options.CleanView && (m.graph == nil || len(m.graph.Rows) == 0) {
 		return statusStyle.Render("Loading...")
 	}
 	selectedCount := 0
@@ -876,6 +909,10 @@ func (m Model) renderListView() string {
 	maxRows := m.height - 2
 	if maxRows <= 0 {
 		maxRows = 20
+	}
+	if m.options.CleanView {
+		m.renderCleanRows(&b, maxRows, selectedCount)
+		return b.String()
 	}
 
 	bg := lipgloss.Color("237")
@@ -972,6 +1009,72 @@ func (m Model) renderListView() string {
 	}
 	b.WriteString(statusStyle.Render(statusText))
 	return b.String()
+}
+
+func (m Model) renderCleanRows(b *strings.Builder, maxRows int, selectedCount int) {
+	bg := lipgloss.Color("237")
+	bgStyle := lipgloss.NewStyle().Background(bg)
+	folds := m.foldDisplayIndex()
+
+	start := scrollOffsetForSelectedIndex(len(m.commits), m.list.Index(), m.scrollOffset, maxRows)
+	if start < 0 {
+		start = 0
+	}
+	lineWidth := m.width - 6
+	if lineWidth <= 0 {
+		lineWidth = 80
+	}
+
+	visualLinesRendered := 0
+	for commitIndex := start; commitIndex < len(m.commits) && visualLinesRendered < maxRows; commitIndex++ {
+		commit := m.commits[commitIndex]
+		highlight := commitIndex == m.list.Index()
+		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
+		warning := ""
+		warningWidth := 0
+		if hasWarning {
+			if highlight {
+				warning = errorStyle.Background(bg).Render(" ⚠️time")
+			} else {
+				warning = errorStyle.Render(" ⚠️time")
+			}
+			warningWidth = 7
+		}
+
+		change := m.editMap[commit.Hash.String()]
+		line := renderCleanCommit(commit, change, folds.ByHash[commit.Hash.String()], lineWidth, highlight, warning, warningWidth)
+		selected := m.selectedCommits[commit.Hash.String()]
+		var selMarker string
+		if selected {
+			if highlight {
+				selMarker = editStyle.Background(bg).Render("[x] ")
+			} else {
+				selMarker = editStyle.Render("[x] ")
+			}
+		} else if highlight {
+			selMarker = bgStyle.Render("    ")
+		} else {
+			selMarker = "    "
+		}
+
+		if highlight {
+			b.WriteString(bgStyle.Render("> "))
+		} else {
+			b.WriteString("  ")
+		}
+		b.WriteString(selMarker)
+		b.WriteString(line)
+		b.WriteString("\n")
+		visualLinesRendered++
+	}
+
+	var statusText string
+	if selectedCount > 0 {
+		statusText = fmt.Sprintf("d:drop f:fold space:select b:batch c:switch a:apply q:quit")
+	} else {
+		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
+	}
+	b.WriteString(statusStyle.Render(statusText))
 }
 
 func (m Model) renderBatchEditView() string {
@@ -1202,6 +1305,90 @@ func renderCombinedCommit(original gitops.CommitInfo, fold foldDisplay, width in
 		color = "11"
 	}
 	return renderTaggedCommit(original, label, lipgloss.Color(color), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+}
+
+func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int) string {
+	name := original.AuthorName
+	date := formatCommitTime(original.AuthorDate)
+	msg := strings.Split(original.Message, "\n")[0]
+	hashColor := lipgloss.Color("14")
+	nameColor := lipgloss.Color("12")
+
+	if change != nil {
+		switch change.Operation {
+		case gitops.ForgeDrop:
+			name = "[drop] " + name
+			hashColor = lipgloss.Color("9")
+			nameColor = lipgloss.Color("9")
+		case gitops.ForgeCombine:
+			label := fold.Label
+			color := fold.Color
+			if label == "" {
+				label = "[fold] "
+			}
+			if color == "" {
+				color = "11"
+			}
+			name = label + name
+			hashColor = lipgloss.Color(color)
+			nameColor = lipgloss.Color(color)
+		default:
+			if change.NewAuthor != nil {
+				name = change.NewAuthor.Name
+				if change.NewAuthor.Email != "" {
+					name = name + " <" + change.NewAuthor.Email + ">"
+				}
+			}
+			if change.NewDate != nil {
+				date = formatCommitTime(*change.NewDate)
+			}
+			if change.NewMessage != "" {
+				msg = strings.Split(change.NewMessage, "\n")[0]
+			}
+		}
+	}
+
+	bg := lipgloss.Color("237")
+	hashStyle := lipgloss.NewStyle().Foreground(hashColor).Bold(true)
+	nameStyle := lipgloss.NewStyle().Foreground(nameColor)
+	dateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
+	sepStyle := lipgloss.NewStyle()
+	if highlight {
+		hashStyle = hashStyle.Background(bg)
+		nameStyle = nameStyle.Background(bg)
+		dateStyle = dateStyle.Background(bg)
+		addStyle = addStyle.Background(bg)
+		delStyle = delStyle.Background(bg)
+		msgStyle = msgStyle.Background(bg)
+		sepStyle = sepStyle.Background(bg)
+	}
+
+	addStr := fmt.Sprintf("+%d", original.Additions)
+	delStr := fmt.Sprintf("-%d", original.Deletions)
+	statsWidth := len(addStr) + 1 + len(delStr)
+	staticWidth := len(original.ShortHash) + 1 + len(name) + 1 + len(date) + 1 + statsWidth + 1
+	msg = truncateForWidth(msg, width-staticWidth-suffixWidth)
+
+	sep := sepStyle.Render(" ")
+	line := hashStyle.Render(original.ShortHash) + sep +
+		nameStyle.Render(name) + sep +
+		dateStyle.Render(date) + sep +
+		addStyle.Render(addStr) + sep + delStyle.Render(delStr) + sep +
+		msgStyle.Render(msg)
+
+	if highlight {
+		line += suffix
+		lineLen := staticWidth + len(msg) + suffixWidth
+		if width > lineLen {
+			line += sepStyle.Render(strings.Repeat(" ", width-lineLen))
+		}
+	} else if suffix != "" {
+		line += suffix
+	}
+	return line
 }
 
 func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.Color, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {

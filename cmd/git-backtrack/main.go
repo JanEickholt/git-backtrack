@@ -21,6 +21,8 @@ func main() {
 	repoPath := flag.String("path", ".", "path to git repository")
 	showVersion := flag.Bool("version", false, "show version information")
 	debugMode := flag.Bool("debug", false, "debug mode - test git operations without TUI")
+	cleanView := flag.Bool("clean", false, "disable graph and aligned column spacing in the overview")
+	plainView := flag.Bool("plain", false, "alias for --clean")
 	flag.Parse()
 
 	if *showVersion {
@@ -69,7 +71,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	model := tui.NewModel(repo)
+	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView || *plainView})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

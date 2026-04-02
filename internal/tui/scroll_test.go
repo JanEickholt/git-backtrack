@@ -59,3 +59,20 @@ func TestGraphRowForCommitScansRowsByCommitIndex(t *testing.T) {
 		t.Fatalf("row = %d, want 2", row)
 	}
 }
+
+func TestScrollOffsetForSelectedIndexKeepsSelectionVisible(t *testing.T) {
+	offset := scrollOffsetForSelectedIndex(20, 12, 0, 5)
+	if offset != 8 {
+		t.Fatalf("offset = %d, want 8", offset)
+	}
+
+	offset = scrollOffsetForSelectedIndex(20, 2, 8, 5)
+	if offset != 2 {
+		t.Fatalf("offset = %d, want 2", offset)
+	}
+
+	offset = scrollOffsetForSelectedIndex(3, 2, 8, 5)
+	if offset != 0 {
+		t.Fatalf("offset = %d, want 0", offset)
+	}
+}
