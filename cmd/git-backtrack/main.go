@@ -22,7 +22,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "show version information")
 	debugMode := flag.Bool("debug", false, "debug mode - test git operations without TUI")
 	cleanView := flag.Bool("clean", false, "disable graph and aligned column spacing in the overview")
-	plainView := flag.Bool("plain", false, "alias for --clean")
+	plainView := flag.Bool("plain", false, "disable graph rendering but keep aligned column spacing")
 	flag.Parse()
 
 	if *showVersion {
@@ -71,7 +71,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView || *plainView})
+	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView, PlainView: *plainView})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

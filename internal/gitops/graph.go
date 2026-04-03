@@ -177,6 +177,10 @@ func renderCommitInfo(commit *CommitInfo, width int, highlight bool) string {
 	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}))
 }
 
+func RenderCommitLineWithColumnWidths(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+}
+
 func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
 	bg := lipgloss.Color("237")
 

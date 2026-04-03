@@ -71,6 +71,11 @@ type Model struct {
 
 type Options struct {
 	CleanView bool
+	PlainView bool
+}
+
+func (o Options) disablesGraph() bool {
+	return o.CleanView || o.PlainView
 }
 
 func NewModel(repo *gitops.Repository) Model {
@@ -88,12 +93,12 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 	var graph *gitops.Graph
 	var err error
 	if currentBranch != "" {
-		if options.CleanView {
+		if options.disablesGraph() {
 			commits, err = repo.ListCommitsFromRef("refs/heads/" + currentBranch)
 		} else {
 			commits, graph, err = repo.ListCommitsFromRefWithGraph("refs/heads/" + currentBranch)
 		}
-	} else if options.CleanView {
+	} else if options.disablesGraph() {
 		commits, err = repo.ListAllCommits()
 	} else {
 		commits, graph, err = repo.ListAllCommitsWithGraph()
@@ -297,7 +302,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	selectedIndex := m.list.Index()
 
-	if m.options.CleanView {
+	if m.options.disablesGraph() {
 		m.scrollOffset = scrollOffsetForSelectedIndex(len(m.commits), selectedIndex, m.scrollOffset, maxRows)
 		return m, cmd
 	}
@@ -823,12 +828,12 @@ func (m *Model) refresh() {
 	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
-		if m.options.CleanView {
+		if m.options.disablesGraph() {
 			commits, err = m.repo.ListCommitsFromRef("refs/heads/" + m.currentBranch)
 		} else {
 			commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
 		}
-	} else if m.options.CleanView {
+	} else if m.options.disablesGraph() {
 		commits, err = m.repo.ListAllCommits()
 	} else {
 		commits, graph, err = m.repo.ListAllCommitsWithGraph()
@@ -881,7 +886,7 @@ func (m Model) renderListView() string {
 	if len(m.commits) == 0 {
 		return statusStyle.Render("No commits found in repository")
 	}
-	if !m.options.CleanView && (m.graph == nil || len(m.graph.Rows) == 0) {
+	if !m.options.disablesGraph() && (m.graph == nil || len(m.graph.Rows) == 0) {
 		return statusStyle.Render("Loading...")
 	}
 	selectedCount := 0
@@ -912,6 +917,10 @@ func (m Model) renderListView() string {
 	}
 	if m.options.CleanView {
 		m.renderCleanRows(&b, maxRows, selectedCount)
+		return b.String()
+	}
+	if m.options.PlainView {
+		m.renderPlainRows(&b, maxRows, selectedCount)
 		return b.String()
 	}
 
@@ -1043,6 +1052,84 @@ func (m Model) renderCleanRows(b *strings.Builder, maxRows int, selectedCount in
 
 		change := m.editMap[commit.Hash.String()]
 		line := renderCleanCommit(commit, change, folds.ByHash[commit.Hash.String()], lineWidth, highlight, warning, warningWidth)
+		selected := m.selectedCommits[commit.Hash.String()]
+		var selMarker string
+		if selected {
+			if highlight {
+				selMarker = editStyle.Background(bg).Render("[x] ")
+			} else {
+				selMarker = editStyle.Render("[x] ")
+			}
+		} else if highlight {
+			selMarker = bgStyle.Render("    ")
+		} else {
+			selMarker = "    "
+		}
+
+		if highlight {
+			b.WriteString(bgStyle.Render("> "))
+		} else {
+			b.WriteString("  ")
+		}
+		b.WriteString(selMarker)
+		b.WriteString(line)
+		b.WriteString("\n")
+		visualLinesRendered++
+	}
+
+	var statusText string
+	if selectedCount > 0 {
+		statusText = fmt.Sprintf("d:drop f:fold space:select b:batch c:switch a:apply q:quit")
+	} else {
+		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
+	}
+	b.WriteString(statusStyle.Render(statusText))
+}
+
+func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount int) {
+	bg := lipgloss.Color("237")
+	bgStyle := lipgloss.NewStyle().Background(bg)
+	folds := m.foldDisplayIndex()
+	authorWidth := m.authorColumnWidth(folds)
+	statWidth := gitops.StatColumnWidth(m.commits)
+
+	start := scrollOffsetForSelectedIndex(len(m.commits), m.list.Index(), m.scrollOffset, maxRows)
+	if start < 0 {
+		start = 0
+	}
+	lineWidth := m.width - 6
+	if lineWidth <= 0 {
+		lineWidth = 80
+	}
+
+	visualLinesRendered := 0
+	for commitIndex := start; commitIndex < len(m.commits) && visualLinesRendered < maxRows; commitIndex++ {
+		commit := m.commits[commitIndex]
+		highlight := commitIndex == m.list.Index()
+		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
+		warning := ""
+		warningWidth := 0
+		if hasWarning {
+			if highlight {
+				warning = errorStyle.Background(bg).Render(" ⚠️time")
+			} else {
+				warning = errorStyle.Render(" ⚠️time")
+			}
+			warningWidth = 7
+		}
+
+		line := gitops.RenderCommitLineWithColumnWidths(commit, lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+		change := m.editMap[commit.Hash.String()]
+		if change != nil {
+			if change.Operation == gitops.ForgeDrop {
+				line = renderDroppedCommit(commit, lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+			} else if change.Operation == gitops.ForgeCombine {
+				line = renderCombinedCommit(commit, folds.ByHash[commit.Hash.String()], lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+			} else {
+				line = renderModifiedCommit(commit, change, lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+			}
+		}
+
 		selected := m.selectedCommits[commit.Hash.String()]
 		var selMarker string
 		if selected {

@@ -88,3 +88,23 @@ func TestStatColumnWidthUsesLargestDisplayedCount(t *testing.T) {
 		t.Fatalf("stat = %q, want %q", stat, "   +8")
 	}
 }
+
+func TestRenderCommitLineWithColumnWidthsKeepsAlignedSpacing(t *testing.T) {
+	commit := CommitInfo{
+		Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:  "1111111",
+		AuthorName: "Jan",
+		AuthorDate: time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC),
+		Additions:  8,
+		Deletions:  12,
+		Message:    "message",
+	}
+
+	line := RenderCommitLineWithColumnWidths(commit, 120, false, "", 0, 8, 4)
+	if !strings.Contains(line, "Jan       2024-01-02") {
+		t.Fatalf("line does not keep padded author spacing: %q", line)
+	}
+	if !strings.Contains(line, "  +8  -12") {
+		t.Fatalf("line does not keep padded stat spacing: %q", line)
+	}
+}
