@@ -39,6 +39,84 @@ func (m *Model) setChange(change gitops.ForgeChange) {
 	m.rebuildEditMap()
 }
 
+func (m *Model) applyWithUndo(fn func()) {
+	before := cloneForgeChanges(m.editQueue)
+	fn()
+	m.recordUndoIfChanged(before)
+}
+
+func (m *Model) recordUndoIfChanged(before []gitops.ForgeChange) {
+	m.rebuildEditMap()
+	if forgeChangesEqual(before, m.editQueue) {
+		return
+	}
+	m.undoStack = append(m.undoStack, before)
+}
+
+func (m *Model) undoLastChange() bool {
+	if len(m.undoStack) == 0 {
+		return false
+	}
+	last := m.undoStack[len(m.undoStack)-1]
+	m.undoStack = m.undoStack[:len(m.undoStack)-1]
+	m.editQueue = cloneForgeChanges(last)
+	m.rebuildEditMap()
+	return true
+}
+
+func cloneForgeChanges(changes []gitops.ForgeChange) []gitops.ForgeChange {
+	cloned := make([]gitops.ForgeChange, len(changes))
+	for i, change := range changes {
+		cloned[i] = change
+		if change.NewAuthor != nil {
+			author := *change.NewAuthor
+			cloned[i].NewAuthor = &author
+		}
+		if change.NewDate != nil {
+			date := *change.NewDate
+			cloned[i].NewDate = &date
+		}
+		if change.CombineGroup != nil {
+			cloned[i].CombineGroup = append([]plumbing.Hash(nil), change.CombineGroup...)
+		}
+	}
+	return cloned
+}
+
+func forgeChangesEqual(a, b []gitops.ForgeChange) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !forgeChangeEqual(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func forgeChangeEqual(a, b gitops.ForgeChange) bool {
+	if a.OriginalHash != b.OriginalHash || a.Operation != b.Operation || a.NewMessage != b.NewMessage || a.CombineAnchor != b.CombineAnchor {
+		return false
+	}
+	if !slices.Equal(a.CombineGroup, b.CombineGroup) {
+		return false
+	}
+	if (a.NewAuthor == nil) != (b.NewAuthor == nil) {
+		return false
+	}
+	if a.NewAuthor != nil && *a.NewAuthor != *b.NewAuthor {
+		return false
+	}
+	if (a.NewDate == nil) != (b.NewDate == nil) {
+		return false
+	}
+	if a.NewDate != nil && !a.NewDate.Equal(*b.NewDate) {
+		return false
+	}
+	return true
+}
+
 func (m *Model) removeChange(hash string) {
 	if m.editMap == nil || m.editMap[hash] == nil {
 		return

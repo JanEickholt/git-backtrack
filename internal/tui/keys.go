@@ -8,6 +8,7 @@ type keyMap struct {
 	Edit         key.Binding
 	Drop         key.Binding
 	Combine      key.Binding
+	Undo         key.Binding
 	Reset        key.Binding
 	Apply        key.Binding
 	Quit         key.Binding
@@ -21,13 +22,13 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Edit, k.Drop, k.Combine, k.Select, k.BatchEdit, k.SwitchBranch, k.Apply, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.SwitchBranch, k.Apply, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down},
-		{k.Edit, k.Drop, k.Combine, k.Select},
+		{k.Edit, k.Drop, k.Combine, k.Undo, k.Select},
 		{k.BatchEdit, k.Reset},
 		{k.SwitchBranch, k.Apply},
 		{k.Quit},
@@ -41,6 +42,7 @@ func defaultKeyMap() keyMap {
 		Edit:         key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Drop:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drop")),
 		Combine:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fold")),
+		Undo:         key.NewBinding(key.WithKeys("u", "ctrl+z"), key.WithHelp("u", "undo")),
 		Reset:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset")),
 		Apply:        key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "apply")),
 		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),

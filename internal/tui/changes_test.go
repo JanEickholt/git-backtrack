@@ -50,6 +50,85 @@ func TestRemoveChangeRebuildsMap(t *testing.T) {
 	}
 }
 
+func TestUndoLastChangeRestoresPendingChangesStepByStep(t *testing.T) {
+	first := plumbing.NewHash("1111111111111111111111111111111111111111")
+	second := plumbing.NewHash("2222222222222222222222222222222222222222")
+	model := Model{}
+
+	model.applyWithUndo(func() {
+		model.setChange(gitops.ForgeChange{OriginalHash: first})
+	})
+	model.applyWithUndo(func() {
+		model.setChange(gitops.ForgeChange{OriginalHash: second, Operation: gitops.ForgeDrop})
+	})
+
+	if len(model.undoStack) != 2 {
+		t.Fatalf("undoStack len = %d, want 2", len(model.undoStack))
+	}
+	if !model.undoLastChange() {
+		t.Fatalf("undoLastChange returned false")
+	}
+	if len(model.editQueue) != 1 || model.editQueue[0].OriginalHash != first {
+		t.Fatalf("editQueue after first undo = %+v, want only first", model.editQueue)
+	}
+	if model.editMap[first.String()] != &model.editQueue[0] {
+		t.Fatalf("editMap pointer was not rebuilt after undo")
+	}
+
+	if !model.undoLastChange() {
+		t.Fatalf("second undoLastChange returned false")
+	}
+	if len(model.editQueue) != 0 {
+		t.Fatalf("editQueue len after second undo = %d, want 0", len(model.editQueue))
+	}
+	if model.undoLastChange() {
+		t.Fatalf("undoLastChange returned true with empty stack")
+	}
+}
+
+func TestApplyWithUndoSkipsNoOp(t *testing.T) {
+	model := Model{}
+
+	model.applyWithUndo(func() {})
+	if len(model.undoStack) != 0 {
+		t.Fatalf("undoStack len = %d, want 0", len(model.undoStack))
+	}
+}
+
+func TestUndoSnapshotDeepCopiesChangeData(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	other := plumbing.NewHash("2222222222222222222222222222222222222222")
+	date := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	model := Model{}
+	model.setChange(gitops.ForgeChange{
+		OriginalHash: hash,
+		NewAuthor:    &gitops.AuthorInfo{Name: "Original", Email: "original@example.com"},
+		NewDate:      &date,
+		CombineGroup: []plumbing.Hash{hash, other},
+	})
+
+	model.applyWithUndo(func() {
+		model.setChange(gitops.ForgeChange{OriginalHash: hash, Operation: gitops.ForgeDrop})
+	})
+	model.editQueue[0].NewAuthor = &gitops.AuthorInfo{Name: "Mutated", Email: "mutated@example.com"}
+	model.editQueue[0].NewDate = nil
+	model.editQueue[0].CombineGroup = []plumbing.Hash{other}
+
+	if !model.undoLastChange() {
+		t.Fatalf("undoLastChange returned false")
+	}
+	change := model.editQueue[0]
+	if change.NewAuthor == nil || change.NewAuthor.Name != "Original" {
+		t.Fatalf("NewAuthor after undo = %+v, want Original", change.NewAuthor)
+	}
+	if change.NewDate == nil || !change.NewDate.Equal(date) {
+		t.Fatalf("NewDate after undo = %v, want %v", change.NewDate, date)
+	}
+	if len(change.CombineGroup) != 2 || change.CombineGroup[0] != hash || change.CombineGroup[1] != other {
+		t.Fatalf("CombineGroup after undo = %v, want original group", change.CombineGroup)
+	}
+}
+
 func TestSelectedCommitInfosPreservesCommitOrder(t *testing.T) {
 	first := plumbing.NewHash("1111111111111111111111111111111111111111")
 	second := plumbing.NewHash("2222222222222222222222222222222222222222")

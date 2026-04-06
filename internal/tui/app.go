@@ -45,6 +45,7 @@ type Model struct {
 	graph           *gitops.Graph
 	editQueue       []gitops.ForgeChange
 	editMap         map[string]*gitops.ForgeChange
+	undoStack       [][]gitops.ForgeChange
 	selectedCommits map[string]bool
 	scrollOffset    int
 
@@ -229,18 +230,26 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Undo):
+		m.undoLastChange()
+		return m, nil
+
 	case key.Matches(msg, m.keys.Drop):
 		if len(m.commits) == 0 {
 			return m, nil
 		}
 		selectedCommits := m.selectedCommitInfos()
 		if len(selectedCommits) > 0 {
-			m.toggleDropForCommits(selectedCommits)
+			m.applyWithUndo(func() {
+				m.toggleDropForCommits(selectedCommits)
+			})
 			return m, nil
 		}
 		idx := m.list.Index()
 		if idx >= 0 && idx < len(m.commits) {
-			m.toggleDropForCommits([]gitops.CommitInfo{m.commits[idx]})
+			m.applyWithUndo(func() {
+				m.toggleDropForCommits([]gitops.CommitInfo{m.commits[idx]})
+			})
 		}
 		return m, nil
 
@@ -253,7 +262,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if idx < 0 || idx >= len(m.commits) || !m.selectedCommits[m.commits[idx].Hash.String()] {
 			return m, nil
 		}
-		m.toggleCombineForCommits(selectedCommits, m.commits[idx].Hash)
+		m.applyWithUndo(func() {
+			m.toggleCombineForCommits(selectedCommits, m.commits[idx].Hash)
+		})
 		return m, nil
 
 	case key.Matches(msg, m.keys.BatchEdit):
@@ -277,7 +288,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		idx := m.list.Index()
 		if idx >= 0 && idx < len(m.commits) {
 			hash := m.commits[idx].Hash.String()
-			m.removeChange(hash)
+			m.applyWithUndo(func() {
+				m.removeChange(hash)
+			})
 		}
 		return m, nil
 
@@ -430,6 +443,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focusField == Message {
 			break
 		}
+		before := cloneForgeChanges(m.editQueue)
 		change := m.buildForgeChange()
 		hashStr := change.OriginalHash.String()
 
@@ -465,6 +479,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.editMap[m.editQueue[i].OriginalHash.String()] = &m.editQueue[i]
 			}
 		}
+		m.recordUndoIfChanged(before)
 		m.state = ViewList
 		m.editingCommit = nil
 		return m, nil
@@ -526,6 +541,7 @@ func (m Model) handleBranchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.currentBranch = bi.name
 				m.editQueue = make([]gitops.ForgeChange, 0)
 				m.editMap = make(map[string]*gitops.ForgeChange)
+				m.undoStack = nil
 				m.selectedCommits = make(map[string]bool)
 				m.refresh()
 			}
@@ -575,6 +591,7 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 	timeAdjust := strings.TrimSpace(m.batchFields[2].Value())
 	newMessage := strings.TrimSpace(m.batchFields[3].Value())
 	timeSpread := strings.TrimSpace(m.batchFields[4].Value())
+	before := cloneForgeChanges(m.editQueue)
 
 	if m.editMap == nil {
 		m.editMap = make(map[string]*gitops.ForgeChange)
@@ -750,6 +767,7 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 		}
 	}
 
+	m.recordUndoIfChanged(before)
 	m.selectedCommits = make(map[string]bool)
 	m.state = ViewList
 	return m, nil
@@ -848,6 +866,7 @@ func (m *Model) refresh() {
 	m.graph = graph
 	m.editQueue = make([]gitops.ForgeChange, 0)
 	m.editMap = make(map[string]*gitops.ForgeChange)
+	m.undoStack = nil
 	items := make([]list.Item, len(commits))
 	for i, commit := range commits {
 		items[i] = commitItem{commit: commit}
@@ -1010,13 +1029,7 @@ func (m Model) renderListView() string {
 		rowIndex++
 	}
 
-	var statusText string
-	if selectedCount > 0 {
-		statusText = fmt.Sprintf("d:drop f:fold space:select b:batch c:switch a:apply q:quit")
-	} else {
-		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
-	}
-	b.WriteString(statusStyle.Render(statusText))
+	b.WriteString(statusStyle.Render(m.listStatusText(selectedCount)))
 	return b.String()
 }
 
@@ -1077,13 +1090,7 @@ func (m Model) renderCleanRows(b *strings.Builder, maxRows int, selectedCount in
 		visualLinesRendered++
 	}
 
-	var statusText string
-	if selectedCount > 0 {
-		statusText = fmt.Sprintf("d:drop f:fold space:select b:batch c:switch a:apply q:quit")
-	} else {
-		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
-	}
-	b.WriteString(statusStyle.Render(statusText))
+	b.WriteString(statusStyle.Render(m.listStatusText(selectedCount)))
 }
 
 func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount int) {
@@ -1155,13 +1162,21 @@ func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount in
 		visualLinesRendered++
 	}
 
-	var statusText string
+	b.WriteString(statusStyle.Render(m.listStatusText(selectedCount)))
+}
+
+func (m Model) listStatusText(selectedCount int) string {
+	parts := []string{}
 	if selectedCount > 0 {
-		statusText = fmt.Sprintf("d:drop f:fold space:select b:batch c:switch a:apply q:quit")
+		parts = append(parts, "d:drop", "f:fold", "space:select", "b:batch")
 	} else {
-		statusText = fmt.Sprintf("e:edit d:drop space:select b:batch c:switch a:apply q:quit")
+		parts = append(parts, "e:edit", "d:drop", "space:select", "b:batch")
 	}
-	b.WriteString(statusStyle.Render(statusText))
+	if len(m.undoStack) > 0 {
+		parts = append(parts, "u:undo")
+	}
+	parts = append(parts, "c:switch", "a:apply", "q:quit")
+	return strings.Join(parts, " ")
 }
 
 func (m Model) renderBatchEditView() string {
