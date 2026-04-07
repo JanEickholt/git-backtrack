@@ -970,19 +970,10 @@ func (m Model) renderListView() string {
 		commit := m.commits[commitIndex]
 		highlight := commitIndex == m.list.Index()
 		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
-		warning := ""
-		warningWidth := 0
-		if hasWarning {
-			if highlight {
-				warning = errorStyle.Background(bg).Render(" ⚠️time")
-			} else {
-				warning = errorStyle.Render(" ⚠️time")
-			}
-			warningWidth = 7
-		}
-
-		line := gitops.RenderGraphLineWithColumnWidths(m.graph, m.commits, rowIndex, lineWidth, style, highlight, warning, warningWidth, authorWidth, statWidth)
 		change := m.editMap[commit.Hash.String()]
+		suffix, suffixWidth := renderCommitSuffix(change, hasWarning, highlight, bg)
+
+		line := gitops.RenderGraphLineWithColumnWidths(m.graph, m.commits, rowIndex, lineWidth, style, highlight, suffix, suffixWidth, authorWidth, statWidth)
 		if change != nil {
 			prefixText := truncateForWidth(row.Prefix, lineWidth)
 			prefix := gitops.RenderGraphPrefix(prefixText, style, highlight)
@@ -991,12 +982,12 @@ func (m Model) renderListView() string {
 				commitWidth = 0
 			}
 			if change.Operation == gitops.ForgeDrop {
-				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 			} else if change.Operation == gitops.ForgeCombine {
 				fold := folds.ByHash[commit.Hash.String()]
-				line = prefix + renderCombinedCommit(commit, fold, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				line = prefix + renderCombinedCommit(commit, fold, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 			} else {
-				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 			}
 		}
 
@@ -1052,19 +1043,9 @@ func (m Model) renderCleanRows(b *strings.Builder, maxRows int, selectedCount in
 		commit := m.commits[commitIndex]
 		highlight := commitIndex == m.list.Index()
 		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
-		warning := ""
-		warningWidth := 0
-		if hasWarning {
-			if highlight {
-				warning = errorStyle.Background(bg).Render(" ⚠️time")
-			} else {
-				warning = errorStyle.Render(" ⚠️time")
-			}
-			warningWidth = 7
-		}
-
 		change := m.editMap[commit.Hash.String()]
-		line := renderCleanCommit(commit, change, folds.ByHash[commit.Hash.String()], lineWidth, highlight, warning, warningWidth)
+		suffix, suffixWidth := renderCommitSuffix(change, hasWarning, highlight, bg)
+		line := renderCleanCommit(commit, change, folds.ByHash[commit.Hash.String()], lineWidth, highlight, suffix, suffixWidth)
 		selected := m.selectedCommits[commit.Hash.String()]
 		var selMarker string
 		if selected {
@@ -1114,26 +1095,16 @@ func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount in
 		commit := m.commits[commitIndex]
 		highlight := commitIndex == m.list.Index()
 		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
-		warning := ""
-		warningWidth := 0
-		if hasWarning {
-			if highlight {
-				warning = errorStyle.Background(bg).Render(" ⚠️time")
-			} else {
-				warning = errorStyle.Render(" ⚠️time")
-			}
-			warningWidth = 7
-		}
-
-		line := gitops.RenderCommitLineWithColumnWidths(commit, lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
 		change := m.editMap[commit.Hash.String()]
+		suffix, suffixWidth := renderCommitSuffix(change, hasWarning, highlight, bg)
+		line := gitops.RenderCommitLineWithColumnWidths(commit, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 		if change != nil {
 			if change.Operation == gitops.ForgeDrop {
-				line = renderDroppedCommit(commit, lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				line = renderDroppedCommit(commit, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 			} else if change.Operation == gitops.ForgeCombine {
-				line = renderCombinedCommit(commit, folds.ByHash[commit.Hash.String()], lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				line = renderCombinedCommit(commit, folds.ByHash[commit.Hash.String()], lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 			} else {
-				line = renderModifiedCommit(commit, change, lineWidth, highlight, warning, warningWidth, authorWidth, statWidth)
+				line = renderModifiedCommit(commit, change, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
 			}
 		}
 
@@ -1407,6 +1378,39 @@ func renderCombinedCommit(original gitops.CommitInfo, fold foldDisplay, width in
 		color = "11"
 	}
 	return renderTaggedCommit(original, label, lipgloss.Color(color), width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+}
+
+func renderCommitSuffix(change *gitops.ForgeChange, hasTimeWarning bool, highlight bool, bg lipgloss.Color) (string, int) {
+	parts := make([]string, 0, 3)
+	width := 0
+	if hasTimeWarning {
+		text := " ⚠️time"
+		style := errorStyle
+		if highlight {
+			style = style.Background(bg)
+		}
+		parts = append(parts, style.Render(text))
+		width += lipgloss.Width(text)
+	}
+	if change != nil && change.NewDate != nil {
+		text := " [time]"
+		style := editStyle
+		if highlight {
+			style = style.Background(bg)
+		}
+		parts = append(parts, style.Render(text))
+		width += lipgloss.Width(text)
+	}
+	if change != nil && change.NewMessage != "" {
+		text := " [msg]"
+		style := editStyle
+		if highlight {
+			style = style.Background(bg)
+		}
+		parts = append(parts, style.Render(text))
+		width += lipgloss.Width(text)
+	}
+	return strings.Join(parts, ""), width
 }
 
 func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int) string {

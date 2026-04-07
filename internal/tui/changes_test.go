@@ -305,3 +305,22 @@ func TestRenderCleanCommitUsesSingleSpacing(t *testing.T) {
 		t.Fatalf("clean line contains padded stats: %q", line)
 	}
 }
+
+func TestRenderCommitSuffixShowsEditedTimeAndMessage(t *testing.T) {
+	date := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	change := &gitops.ForgeChange{
+		NewDate:    &date,
+		NewMessage: "tampered message",
+	}
+
+	suffix, width := renderCommitSuffix(change, false, false, "237")
+	if !strings.Contains(suffix, "[time]") {
+		t.Fatalf("suffix missing time indicator: %q", suffix)
+	}
+	if !strings.Contains(suffix, "[msg]") {
+		t.Fatalf("suffix missing message indicator: %q", suffix)
+	}
+	if width != len(" [time] [msg]") {
+		t.Fatalf("width = %d, want %d", width, len(" [time] [msg]"))
+	}
+}
