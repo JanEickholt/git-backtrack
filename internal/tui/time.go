@@ -8,8 +8,11 @@ import (
 	"github.com/Jan/git-backtrack/internal/gitops"
 )
 
-func formatCommitTime(t time.Time) string {
-	return t.Format("2006-01-02 15:04 -0700")
+func formatCommitTime(t time.Time, showTimezone bool) string {
+	if showTimezone {
+		return t.Format("2006-01-02 15:04 -0700")
+	}
+	return t.In(time.Local).Format("2006-01-02 15:04")
 }
 
 func adjustTime(original time.Time, adjustment string) (time.Time, error) {

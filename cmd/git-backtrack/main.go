@@ -23,6 +23,8 @@ func main() {
 	debugMode := flag.Bool("debug", false, "debug mode - test git operations without TUI")
 	cleanView := flag.Bool("clean", false, "disable graph and aligned column spacing in the overview")
 	plainView := flag.Bool("plain", false, "disable graph rendering but keep aligned column spacing")
+	timezoneView := flag.Bool("timezone", false, "show timezone offsets in commit timestamps")
+	showTimezone := flag.Bool("show-timezone", false, "alias for --timezone")
 	flag.Parse()
 
 	if *showVersion {
@@ -71,7 +73,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView, PlainView: *plainView})
+	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView, PlainView: *plainView, ShowTimezone: *timezoneView || *showTimezone})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

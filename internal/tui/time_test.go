@@ -41,8 +41,21 @@ func TestFormatCommitTimePreservesTimezoneOffset(t *testing.T) {
 	loc := time.FixedZone("test", 2*60*60)
 	commitTime := time.Date(2024, 1, 2, 3, 4, 5, 0, loc)
 
-	got := formatCommitTime(commitTime)
+	got := formatCommitTime(commitTime, true)
 	want := "2024-01-02 03:04 +0200"
+	if got != want {
+		t.Fatalf("formatCommitTime = %q, want %q", got, want)
+	}
+}
+
+func TestFormatCommitTimeHidesTimezoneInLocalTime(t *testing.T) {
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.FixedZone("local", -5*60*60)
+	commitTime := time.Date(2024, 1, 2, 3, 4, 5, 0, time.FixedZone("test", 2*60*60))
+
+	got := formatCommitTime(commitTime, false)
+	want := "2024-01-01 20:04"
 	if got != want {
 		t.Fatalf("formatCommitTime = %q, want %q", got, want)
 	}

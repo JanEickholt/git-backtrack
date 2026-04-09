@@ -108,3 +108,24 @@ func TestRenderCommitLineWithColumnWidthsKeepsAlignedSpacing(t *testing.T) {
 		t.Fatalf("line does not keep padded stat spacing: %q", line)
 	}
 }
+
+func TestRenderCommitLineWithColumnWidthsCanHideTimezone(t *testing.T) {
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.FixedZone("local", -5*60*60)
+	commit := CommitInfo{
+		Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:  "1111111",
+		AuthorName: "Jan",
+		AuthorDate: time.Date(2024, 1, 2, 3, 4, 0, 0, time.FixedZone("test", 2*60*60)),
+		Message:    "message",
+	}
+
+	line := RenderCommitLineWithColumnWidthsAndTimezone(commit, 120, false, "", 0, 3, 2, false)
+	if !strings.Contains(line, "2024-01-01 20:04") {
+		t.Fatalf("line does not show local time without timezone: %q", line)
+	}
+	if strings.Contains(line, "+0200") || strings.Contains(line, "-0500") {
+		t.Fatalf("line should not include timezone offset: %q", line)
+	}
+}

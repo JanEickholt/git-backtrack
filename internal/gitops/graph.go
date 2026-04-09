@@ -3,6 +3,7 @@ package gitops
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -128,6 +129,10 @@ func RenderGraphLineWithAuthorWidth(graph *Graph, commits []CommitInfo, rowIndex
 }
 
 func RenderGraphLineWithColumnWidths(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+	return RenderGraphLineWithColumnWidthsAndTimezone(graph, commits, rowIndex, width, style, highlight, suffix, suffixWidth, authorWidth, statWidth, true)
+}
+
+func RenderGraphLineWithColumnWidthsAndTimezone(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
 	if graph == nil || rowIndex >= len(graph.Rows) || rowIndex < 0 {
 		return ""
 	}
@@ -142,7 +147,7 @@ func RenderGraphLineWithColumnWidths(graph *Graph, commits []CommitInfo, rowInde
 	if commitWidth < 0 {
 		commitWidth = 0
 	}
-	commitStr := renderCommitInfoWithSuffix(&commits[row.CommitIndex], commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth)
+	commitStr := renderCommitInfoWithSuffix(&commits[row.CommitIndex], commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone)
 	return prefix + commitStr
 }
 
@@ -174,14 +179,18 @@ func RenderGraphPrefix(prefix string, style GraphStyle, highlight bool) string {
 }
 
 func renderCommitInfo(commit *CommitInfo, width int, highlight bool) string {
-	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}))
+	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}), true)
 }
 
 func RenderCommitLineWithColumnWidths(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
-	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth)
+	return RenderCommitLineWithColumnWidthsAndTimezone(commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, true)
 }
 
-func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
+func RenderCommitLineWithColumnWidthsAndTimezone(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
+	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone)
+}
+
+func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
 	bg := lipgloss.Color("237")
 
 	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
@@ -202,7 +211,7 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 		sepStyle = sepStyle.Background(bg)
 	}
 
-	dateStr := commit.AuthorDate.Format("2006-01-02 15:04 -0700")
+	dateStr := formatCommitTime(commit.AuthorDate, showTimezone)
 	message := commit.Message
 	if idx := strings.Index(message, "\n"); idx != -1 {
 		message = message[:idx]
@@ -237,6 +246,13 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	}
 
 	return line
+}
+
+func formatCommitTime(t time.Time, showTimezone bool) string {
+	if showTimezone {
+		return t.Format("2006-01-02 15:04 -0700")
+	}
+	return t.In(time.Local).Format("2006-01-02 15:04")
 }
 
 func AuthorColumnWidth(commits []CommitInfo) int {

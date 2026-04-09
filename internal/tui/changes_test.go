@@ -297,8 +297,12 @@ func TestRenderCleanCommitUsesSingleSpacing(t *testing.T) {
 		Message:    "message",
 	}
 
-	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0)
-	if !strings.Contains(line, "1111111 Jan 2024-01-02 03:04 +0000 +8 -12 message") {
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.UTC
+
+	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false)
+	if !strings.Contains(line, "1111111 Jan 2024-01-02 03:04 +8 -12 message") {
 		t.Fatalf("clean line has unexpected spacing: %q", line)
 	}
 	if strings.Contains(line, "   +8") {
