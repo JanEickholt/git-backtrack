@@ -5,6 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/Jan/git-backtrack/internal/gitops"
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -24,6 +27,41 @@ func TestSetChangeReplacesExistingChange(t *testing.T) {
 	}
 	if model.editMap[hash.String()] != &model.editQueue[0] {
 		t.Fatalf("editMap pointer was not rebuilt")
+	}
+}
+
+func TestHandleListKeyCtrlArrowsMoveByPage(t *testing.T) {
+	items := make([]list.Item, 20)
+	commits := make([]gitops.CommitInfo, 20)
+	for i := range commits {
+		hash := plumbing.NewHash(strings.Repeat("1", 39) + string(rune('0'+i%10)))
+		commits[i] = gitops.CommitInfo{Hash: hash}
+		items[i] = commitItem{commit: commits[i]}
+	}
+	m := Model{
+		commits: commits,
+		list:    list.New(items, commitDelegate{}, 80, 20),
+		height:  7,
+		keys:    defaultKeyMap(),
+		options: Options{PlainView: true},
+	}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyCtrlDown})
+	m = updated.(Model)
+	if m.list.Index() != 5 {
+		t.Fatalf("index after ctrl+down = %d, want 5", m.list.Index())
+	}
+	if m.scrollOffset != 1 {
+		t.Fatalf("scrollOffset after ctrl+down = %d, want 1", m.scrollOffset)
+	}
+
+	updated, _ = m.handleListKey(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	m = updated.(Model)
+	if m.list.Index() != 0 {
+		t.Fatalf("index after ctrl+up = %d, want 0", m.list.Index())
+	}
+	if m.scrollOffset != 0 {
+		t.Fatalf("scrollOffset after ctrl+up = %d, want 0", m.scrollOffset)
 	}
 }
 

@@ -76,3 +76,45 @@ func TestScrollOffsetForSelectedIndexKeepsSelectionVisible(t *testing.T) {
 		t.Fatalf("offset = %d, want 0", offset)
 	}
 }
+
+func TestPageMoveTargetIndexMovesByVisibleRows(t *testing.T) {
+	target := pageMoveTargetIndex(20, 4, 5, 1)
+	if target != 9 {
+		t.Fatalf("target = %d, want 9", target)
+	}
+
+	target = pageMoveTargetIndex(20, 4, 5, -1)
+	if target != 0 {
+		t.Fatalf("target = %d, want 0", target)
+	}
+
+	target = pageMoveTargetIndex(20, 18, 5, 1)
+	if target != 19 {
+		t.Fatalf("target = %d, want 19", target)
+	}
+}
+
+func TestPageMoveTargetCommitUsesGraphRows(t *testing.T) {
+	graph := &gitops.Graph{
+		Rows: []gitops.GraphRow{
+			{IsCommit: true, CommitIndex: 0},
+			{Prefix: "|\\", CommitIndex: -1},
+			{Prefix: "| |", CommitIndex: -1},
+			{IsCommit: true, CommitIndex: 1},
+			{Prefix: "|/", CommitIndex: -1},
+			{IsCommit: true, CommitIndex: 2},
+			{Prefix: "|", CommitIndex: -1},
+			{IsCommit: true, CommitIndex: 3},
+		},
+	}
+
+	target := pageMoveTargetCommit(graph, 4, 0, 4, 1)
+	if target != 2 {
+		t.Fatalf("target = %d, want 2", target)
+	}
+
+	target = pageMoveTargetCommit(graph, 4, 3, 4, -1)
+	if target != 1 {
+		t.Fatalf("target = %d, want 1", target)
+	}
+}

@@ -208,6 +208,14 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
 
+	case key.Matches(msg, m.keys.PageUp):
+		m.moveListPage(-1)
+		return m, nil
+
+	case key.Matches(msg, m.keys.PageDown):
+		m.moveListPage(1)
+		return m, nil
+
 	case key.Matches(msg, m.keys.Edit):
 		if len(m.commits) == 0 {
 			return m, nil
@@ -309,23 +317,42 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
+	m.updateListScrollOffset(m.visibleListRows())
+	return m, cmd
+}
 
+func (m *Model) moveListPage(direction int) {
+	if len(m.commits) == 0 || direction == 0 {
+		return
+	}
+	maxRows := m.visibleListRows()
+	selectedIndex := m.list.Index()
+	targetIndex := pageMoveTargetIndex(len(m.commits), selectedIndex, maxRows, direction)
+	if !m.options.disablesGraph() && m.graph != nil {
+		targetIndex = pageMoveTargetCommit(m.graph, len(m.commits), selectedIndex, maxRows, direction)
+	}
+	m.list.Select(targetIndex)
+	m.updateListScrollOffset(maxRows)
+}
+
+func (m *Model) updateListScrollOffset(maxRows int) {
+	selectedIndex := m.list.Index()
+	if m.options.disablesGraph() {
+		m.scrollOffset = scrollOffsetForSelectedIndex(len(m.commits), selectedIndex, m.scrollOffset, maxRows)
+		return
+	}
+	if m.graph == nil {
+		return
+	}
+	m.scrollOffset = scrollOffsetForSelectedCommit(m.graph, selectedIndex, m.scrollOffset, maxRows)
+}
+
+func (m Model) visibleListRows() int {
 	maxRows := m.height - 2
 	if maxRows <= 0 {
 		maxRows = 20
 	}
-	selectedIndex := m.list.Index()
-
-	if m.options.disablesGraph() {
-		m.scrollOffset = scrollOffsetForSelectedIndex(len(m.commits), selectedIndex, m.scrollOffset, maxRows)
-		return m, cmd
-	}
-	if m.graph == nil {
-		return m, cmd
-	}
-	m.scrollOffset = scrollOffsetForSelectedCommit(m.graph, selectedIndex, m.scrollOffset, maxRows)
-
-	return m, cmd
+	return maxRows
 }
 
 func (m *Model) initEditFields() {
