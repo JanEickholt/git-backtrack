@@ -133,6 +133,10 @@ func RenderGraphLineWithColumnWidths(graph *Graph, commits []CommitInfo, rowInde
 }
 
 func RenderGraphLineWithColumnWidthsAndTimezone(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
+	return RenderGraphLineWithColumnWidthsAndOptions(graph, commits, rowIndex, width, style, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, false)
+}
+
+func RenderGraphLineWithColumnWidthsAndOptions(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
 	if graph == nil || rowIndex >= len(graph.Rows) || rowIndex < 0 {
 		return ""
 	}
@@ -147,7 +151,7 @@ func RenderGraphLineWithColumnWidthsAndTimezone(graph *Graph, commits []CommitIn
 	if commitWidth < 0 {
 		commitWidth = 0
 	}
-	commitStr := renderCommitInfoWithSuffix(&commits[row.CommitIndex], commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone)
+	commitStr := renderCommitInfoWithSuffix(&commits[row.CommitIndex], commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail)
 	return prefix + commitStr
 }
 
@@ -179,7 +183,7 @@ func RenderGraphPrefix(prefix string, style GraphStyle, highlight bool) string {
 }
 
 func renderCommitInfo(commit *CommitInfo, width int, highlight bool) string {
-	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}), true)
+	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}), true, false)
 }
 
 func RenderCommitLineWithColumnWidths(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
@@ -187,10 +191,14 @@ func RenderCommitLineWithColumnWidths(commit CommitInfo, width int, highlight bo
 }
 
 func RenderCommitLineWithColumnWidthsAndTimezone(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
-	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone)
+	return RenderCommitLineWithColumnWidthsAndOptions(commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, false)
 }
 
-func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
+func RenderCommitLineWithColumnWidthsAndOptions(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
+	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail)
+}
+
+func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
 	bg := lipgloss.Color("237")
 
 	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
@@ -217,7 +225,7 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 		message = message[:idx]
 	}
 
-	authorStr := FormatCommitAuthor(commit.AuthorName, authorWidth)
+	authorStr := FormatCommitAuthor(FormatCommitAuthorIdentity(commit.AuthorName, commit.AuthorEmail, showEmail), authorWidth)
 	addStr := FormatCommitStat("+", commit.Additions, statWidth)
 	delStr := FormatCommitStat("-", commit.Deletions, statWidth)
 
@@ -256,10 +264,15 @@ func formatCommitTime(t time.Time, showTimezone bool) string {
 }
 
 func AuthorColumnWidth(commits []CommitInfo) int {
+	return AuthorColumnWidthWithEmail(commits, false)
+}
+
+func AuthorColumnWidthWithEmail(commits []CommitInfo, showEmail bool) int {
 	width := 0
 	for _, commit := range commits {
-		if len(commit.AuthorName) > width {
-			width = len(commit.AuthorName)
+		author := FormatCommitAuthorIdentity(commit.AuthorName, commit.AuthorEmail, showEmail)
+		if len(author) > width {
+			width = len(author)
 		}
 	}
 	return width
@@ -276,6 +289,13 @@ func StatColumnWidth(commits []CommitInfo) int {
 
 func FormatCommitAuthor(author string, width int) string {
 	return padRight(truncateForWidth(author, width), width)
+}
+
+func FormatCommitAuthorIdentity(name string, email string, showEmail bool) string {
+	if showEmail && email != "" {
+		return name + " <" + email + ">"
+	}
+	return name
 }
 
 func FormatCommitStat(prefix string, value int, width int) string {

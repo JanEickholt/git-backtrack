@@ -129,3 +129,25 @@ func TestRenderCommitLineWithColumnWidthsCanHideTimezone(t *testing.T) {
 		t.Fatalf("line should not include timezone offset: %q", line)
 	}
 }
+
+func TestRenderCommitLineWithColumnWidthsCanShowEmail(t *testing.T) {
+	commit := CommitInfo{
+		Hash:        plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:   "1111111",
+		AuthorName:  "Jan",
+		AuthorEmail: "jan@example.com",
+		AuthorDate:  time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC),
+		Message:     "message",
+	}
+	width := AuthorColumnWidthWithEmail([]CommitInfo{commit}, true)
+
+	line := RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, width, 2, false, true)
+	if !strings.Contains(line, "Jan <jan@example.com>") {
+		t.Fatalf("line does not include email: %q", line)
+	}
+
+	line = RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, width, 2, false, false)
+	if strings.Contains(line, "jan@example.com") {
+		t.Fatalf("line should not include email: %q", line)
+	}
+}

@@ -74,6 +74,7 @@ type Options struct {
 	CleanView    bool
 	PlainView    bool
 	ShowTimezone bool
+	ShowEmail    bool
 }
 
 func (o Options) disablesGraph() bool {
@@ -1001,7 +1002,7 @@ func (m Model) renderListView() string {
 		change := m.editMap[commit.Hash.String()]
 		suffix, suffixWidth := renderCommitSuffix(change, hasWarning, highlight, bg)
 
-		line := gitops.RenderGraphLineWithColumnWidthsAndTimezone(m.graph, m.commits, rowIndex, lineWidth, style, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+		line := gitops.RenderGraphLineWithColumnWidthsAndOptions(m.graph, m.commits, rowIndex, lineWidth, style, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 		if change != nil {
 			prefixText := truncateForWidth(row.Prefix, lineWidth)
 			prefix := gitops.RenderGraphPrefix(prefixText, style, highlight)
@@ -1010,12 +1011,12 @@ func (m Model) renderListView() string {
 				commitWidth = 0
 			}
 			if change.Operation == gitops.ForgeDrop {
-				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+				line = prefix + renderDroppedCommit(commit, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 			} else if change.Operation == gitops.ForgeCombine {
 				fold := folds.ByHash[commit.Hash.String()]
-				line = prefix + renderCombinedCommit(commit, fold, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+				line = prefix + renderCombinedCommit(commit, fold, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 			} else {
-				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+				line = prefix + renderModifiedCommit(commit, change, commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 			}
 		}
 
@@ -1073,7 +1074,7 @@ func (m Model) renderCleanRows(b *strings.Builder, maxRows int, selectedCount in
 		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
 		change := m.editMap[commit.Hash.String()]
 		suffix, suffixWidth := renderCommitSuffix(change, hasWarning, highlight, bg)
-		line := renderCleanCommit(commit, change, folds.ByHash[commit.Hash.String()], lineWidth, highlight, suffix, suffixWidth, m.options.ShowTimezone)
+		line := renderCleanCommit(commit, change, folds.ByHash[commit.Hash.String()], lineWidth, highlight, suffix, suffixWidth, m.options.ShowTimezone, m.options.ShowEmail)
 		selected := m.selectedCommits[commit.Hash.String()]
 		var selMarker string
 		if selected {
@@ -1125,14 +1126,14 @@ func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount in
 		hasWarning := hasTimeAnomaly(commit, m.commits, m.editMap)
 		change := m.editMap[commit.Hash.String()]
 		suffix, suffixWidth := renderCommitSuffix(change, hasWarning, highlight, bg)
-		line := gitops.RenderCommitLineWithColumnWidthsAndTimezone(commit, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+		line := gitops.RenderCommitLineWithColumnWidthsAndOptions(commit, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 		if change != nil {
 			if change.Operation == gitops.ForgeDrop {
-				line = renderDroppedCommit(commit, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+				line = renderDroppedCommit(commit, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 			} else if change.Operation == gitops.ForgeCombine {
-				line = renderCombinedCommit(commit, folds.ByHash[commit.Hash.String()], lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+				line = renderCombinedCommit(commit, folds.ByHash[commit.Hash.String()], lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 			} else {
-				line = renderModifiedCommit(commit, change, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone)
+				line = renderModifiedCommit(commit, change, lineWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, m.options.ShowTimezone, m.options.ShowEmail)
 			}
 		}
 
@@ -1370,19 +1371,16 @@ func (m Model) renderBranchView() string {
 }
 
 func (m Model) authorColumnWidth(folds foldDisplayIndex) int {
-	width := gitops.AuthorColumnWidth(m.commits)
+	width := gitops.AuthorColumnWidthWithEmail(m.commits, m.options.ShowEmail)
 	for _, commit := range m.commits {
 		if change := m.editMap[commit.Hash.String()]; change != nil {
-			name := commit.AuthorName
+			name := gitops.FormatCommitAuthorIdentity(commit.AuthorName, commit.AuthorEmail, m.options.ShowEmail)
 			if change.Operation == gitops.ForgeDrop {
 				name = "[drop] " + name
 			} else if change.Operation == gitops.ForgeCombine {
 				name = folds.ByHash[commit.Hash.String()].Label + name
 			} else if change.NewAuthor != nil {
-				name = change.NewAuthor.Name
-				if change.NewAuthor.Email != "" {
-					name += " <" + change.NewAuthor.Email + ">"
-				}
+				name = gitops.FormatCommitAuthorIdentity(change.NewAuthor.Name, change.NewAuthor.Email, m.options.ShowEmail || change.NewAuthor.Email != "")
 			}
 			if len(name) > width {
 				width = len(name)
@@ -1392,11 +1390,11 @@ func (m Model) authorColumnWidth(folds foldDisplayIndex) int {
 	return width
 }
 
-func renderDroppedCommit(original gitops.CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
-	return renderTaggedCommit(original, "[drop] ", lipgloss.Color("9"), width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone)
+func renderDroppedCommit(original gitops.CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
+	return renderTaggedCommit(original, "[drop] ", lipgloss.Color("9"), width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail)
 }
 
-func renderCombinedCommit(original gitops.CommitInfo, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
+func renderCombinedCommit(original gitops.CommitInfo, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
 	label := fold.Label
 	color := fold.Color
 	if label == "" {
@@ -1405,7 +1403,7 @@ func renderCombinedCommit(original gitops.CommitInfo, fold foldDisplay, width in
 	if color == "" {
 		color = "11"
 	}
-	return renderTaggedCommit(original, label, lipgloss.Color(color), width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone)
+	return renderTaggedCommit(original, label, lipgloss.Color(color), width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail)
 }
 
 func renderCommitSuffix(change *gitops.ForgeChange, hasTimeWarning bool, highlight bool, bg lipgloss.Color) (string, int) {
@@ -1441,8 +1439,8 @@ func renderCommitSuffix(change *gitops.ForgeChange, hasTimeWarning bool, highlig
 	return strings.Join(parts, ""), width
 }
 
-func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int, showTimezone bool) string {
-	name := original.AuthorName
+func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int, showTimezone bool, showEmail bool) string {
+	name := gitops.FormatCommitAuthorIdentity(original.AuthorName, original.AuthorEmail, showEmail)
 	date := formatCommitTime(original.AuthorDate, showTimezone)
 	msg := strings.Split(original.Message, "\n")[0]
 	hashColor := lipgloss.Color("14")
@@ -1468,10 +1466,7 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 			nameColor = lipgloss.Color(color)
 		default:
 			if change.NewAuthor != nil {
-				name = change.NewAuthor.Name
-				if change.NewAuthor.Email != "" {
-					name = name + " <" + change.NewAuthor.Email + ">"
-				}
+				name = gitops.FormatCommitAuthorIdentity(change.NewAuthor.Name, change.NewAuthor.Email, showEmail || change.NewAuthor.Email != "")
 			}
 			if change.NewDate != nil {
 				date = formatCommitTime(*change.NewDate, showTimezone)
@@ -1525,10 +1520,10 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 	return line
 }
 
-func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.Color, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
+func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.Color, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
 	msg := strings.Split(original.Message, "\n")[0]
 	date := formatCommitTime(original.AuthorDate, showTimezone)
-	name := gitops.FormatCommitAuthor(tag+original.AuthorName, authorWidth)
+	name := gitops.FormatCommitAuthor(tag+gitops.FormatCommitAuthorIdentity(original.AuthorName, original.AuthorEmail, showEmail), authorWidth)
 
 	bg := lipgloss.Color("237")
 	hashStyle := lipgloss.NewStyle().Foreground(color).Bold(true)
@@ -1570,16 +1565,13 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 	return line
 }
 
-func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
-	name := original.AuthorName
+func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
+	name := gitops.FormatCommitAuthorIdentity(original.AuthorName, original.AuthorEmail, showEmail)
 	date := formatCommitTime(original.AuthorDate, showTimezone)
 	msg := strings.Split(original.Message, "\n")[0]
 
 	if change.NewAuthor != nil {
-		name = change.NewAuthor.Name
-		if change.NewAuthor.Email != "" {
-			name = name + " <" + change.NewAuthor.Email + ">"
-		}
+		name = gitops.FormatCommitAuthorIdentity(change.NewAuthor.Name, change.NewAuthor.Email, showEmail || change.NewAuthor.Email != "")
 	}
 	if change.NewDate != nil {
 		date = formatCommitTime(*change.NewDate, showTimezone)
