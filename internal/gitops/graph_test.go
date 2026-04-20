@@ -141,13 +141,37 @@ func TestRenderCommitLineWithColumnWidthsCanShowEmail(t *testing.T) {
 	}
 	width := AuthorColumnWidthWithEmail([]CommitInfo{commit}, true)
 
-	line := RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, width, 2, false, true)
+	line := RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, width, 2, false, true, true)
 	if !strings.Contains(line, "Jan <jan@example.com>") {
 		t.Fatalf("line does not include email: %q", line)
 	}
 
-	line = RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, width, 2, false, false)
+	line = RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, width, 2, false, false, true)
 	if strings.Contains(line, "jan@example.com") {
 		t.Fatalf("line should not include email: %q", line)
+	}
+}
+
+func TestRenderCommitLineWithColumnWidthsCanHideLineDiffs(t *testing.T) {
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.UTC
+
+	commit := CommitInfo{
+		Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:  "1111111",
+		AuthorName: "Jan",
+		AuthorDate: time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC),
+		Additions:  8,
+		Deletions:  12,
+		Message:    "message",
+	}
+
+	line := RenderCommitLineWithColumnWidthsAndOptions(commit, 120, false, "", 0, 3, 4, false, false, false)
+	if strings.Contains(line, "+8") || strings.Contains(line, "-12") {
+		t.Fatalf("line should not include line diffs: %q", line)
+	}
+	if !strings.Contains(line, "2024-01-02 03:04  message") {
+		t.Fatalf("line should keep spacing between date and message: %q", line)
 	}
 }

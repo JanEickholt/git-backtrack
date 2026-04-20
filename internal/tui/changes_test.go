@@ -339,7 +339,7 @@ func TestRenderCleanCommitUsesSingleSpacing(t *testing.T) {
 	t.Cleanup(func() { time.Local = oldLocal })
 	time.Local = time.UTC
 
-	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false, false)
+	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false, false, true)
 	if !strings.Contains(line, "1111111 Jan 2024-01-02 03:04 +8 -12 message") {
 		t.Fatalf("clean line has unexpected spacing: %q", line)
 	}
@@ -362,9 +362,33 @@ func TestRenderCleanCommitCanShowEmail(t *testing.T) {
 	t.Cleanup(func() { time.Local = oldLocal })
 	time.Local = time.UTC
 
-	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false, true)
+	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false, true, true)
 	if !strings.Contains(line, "Jan <jan@example.com>") {
 		t.Fatalf("clean line does not include email: %q", line)
+	}
+}
+
+func TestRenderCleanCommitCanHideLineDiffs(t *testing.T) {
+	commit := gitops.CommitInfo{
+		Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:  "1111111",
+		AuthorName: "Jan",
+		AuthorDate: time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC),
+		Additions:  8,
+		Deletions:  12,
+		Message:    "message",
+	}
+
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.UTC
+
+	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false, false, false)
+	if strings.Contains(line, "+8") || strings.Contains(line, "-12") {
+		t.Fatalf("clean line should not include line diffs: %q", line)
+	}
+	if !strings.Contains(line, "1111111 Jan 2024-01-02 03:04 message") {
+		t.Fatalf("clean line has unexpected spacing: %q", line)
 	}
 }
 

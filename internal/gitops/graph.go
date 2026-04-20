@@ -133,10 +133,10 @@ func RenderGraphLineWithColumnWidths(graph *Graph, commits []CommitInfo, rowInde
 }
 
 func RenderGraphLineWithColumnWidthsAndTimezone(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
-	return RenderGraphLineWithColumnWidthsAndOptions(graph, commits, rowIndex, width, style, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, false)
+	return RenderGraphLineWithColumnWidthsAndOptions(graph, commits, rowIndex, width, style, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, false, true)
 }
 
-func RenderGraphLineWithColumnWidthsAndOptions(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
+func RenderGraphLineWithColumnWidthsAndOptions(graph *Graph, commits []CommitInfo, rowIndex int, width int, style GraphStyle, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool, showLineDiffs bool) string {
 	if graph == nil || rowIndex >= len(graph.Rows) || rowIndex < 0 {
 		return ""
 	}
@@ -151,7 +151,7 @@ func RenderGraphLineWithColumnWidthsAndOptions(graph *Graph, commits []CommitInf
 	if commitWidth < 0 {
 		commitWidth = 0
 	}
-	commitStr := renderCommitInfoWithSuffix(&commits[row.CommitIndex], commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail)
+	commitStr := renderCommitInfoWithSuffix(&commits[row.CommitIndex], commitWidth, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail, showLineDiffs)
 	return prefix + commitStr
 }
 
@@ -183,7 +183,7 @@ func RenderGraphPrefix(prefix string, style GraphStyle, highlight bool) string {
 }
 
 func renderCommitInfo(commit *CommitInfo, width int, highlight bool) string {
-	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}), true, false)
+	return renderCommitInfoWithSuffix(commit, width, highlight, "", 0, len(commit.AuthorName), StatColumnWidth([]CommitInfo{*commit}), true, false, true)
 }
 
 func RenderCommitLineWithColumnWidths(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int) string {
@@ -191,14 +191,14 @@ func RenderCommitLineWithColumnWidths(commit CommitInfo, width int, highlight bo
 }
 
 func RenderCommitLineWithColumnWidthsAndTimezone(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool) string {
-	return RenderCommitLineWithColumnWidthsAndOptions(commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, false)
+	return RenderCommitLineWithColumnWidthsAndOptions(commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, false, true)
 }
 
-func RenderCommitLineWithColumnWidthsAndOptions(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
-	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail)
+func RenderCommitLineWithColumnWidthsAndOptions(commit CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool, showLineDiffs bool) string {
+	return renderCommitInfoWithSuffix(&commit, width, highlight, suffix, suffixWidth, authorWidth, statWidth, showTimezone, showEmail, showLineDiffs)
 }
 
-func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool) string {
+func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool, showLineDiffs bool) string {
 	bg := lipgloss.Color("237")
 
 	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
@@ -229,7 +229,10 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	addStr := FormatCommitStat("+", commit.Additions, statWidth)
 	delStr := FormatCommitStat("-", commit.Deletions, statWidth)
 
-	staticWidth := len(commit.ShortHash) + 2 + authorWidth + 2 + len(dateStr) + 2 + statWidth + 1 + statWidth + 2
+	staticWidth := len(commit.ShortHash) + 2 + authorWidth + 2 + len(dateStr) + 2
+	if showLineDiffs {
+		staticWidth += statWidth + 1 + statWidth + 2
+	}
 	availableForMsg := width - staticWidth - suffixWidth
 	message = truncateForWidth(message, availableForMsg)
 
@@ -239,9 +242,11 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	delPart := delStyle.Render(delStr)
 	line := hashStyle.Render(commit.ShortHash) + sep +
 		authorStyle.Render(authorStr) + sep +
-		dateStyle.Render(dateStr) + sep +
-		addPart + statSep + delPart + sep +
-		msgStyle.Render(message)
+		dateStyle.Render(dateStr) + sep
+	if showLineDiffs {
+		line += addPart + statSep + delPart + sep
+	}
+	line += msgStyle.Render(message)
 
 	if highlight {
 		line += suffix

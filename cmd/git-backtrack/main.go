@@ -27,6 +27,8 @@ func main() {
 	showTimezone := flag.Bool("show-timezone", false, "alias for --timezone")
 	emailView := flag.Bool("email", false, "show author emails in the overview")
 	showEmail := flag.Bool("show-email", false, "alias for --email")
+	noLineDiffs := flag.Bool("no-line-diffs", false, "hide +N/-N line diff stats in the overview")
+	hideLineDiffs := flag.Bool("hide-line-diffs", false, "alias for --no-line-diffs")
 	flag.Parse()
 
 	if *showVersion {
@@ -75,7 +77,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView, PlainView: *plainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail})
+	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView, PlainView: *plainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail, HideLineDiffs: *noLineDiffs || *hideLineDiffs})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
