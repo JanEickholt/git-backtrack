@@ -65,6 +65,72 @@ func TestHandleListKeyCtrlArrowsMoveByPage(t *testing.T) {
 	}
 }
 
+func TestHandleListKeySettingsOpensSettings(t *testing.T) {
+	m := Model{keys: defaultKeyMap()}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	m = updated.(Model)
+	if m.state != ViewSettings {
+		t.Fatalf("state = %v, want ViewSettings", m.state)
+	}
+}
+
+func TestHandleSettingsKeyTogglesSettings(t *testing.T) {
+	m := Model{state: ViewSettings, keys: defaultKeyMap(), graph: &gitops.Graph{Rows: []gitops.GraphRow{{IsCommit: true}}}}
+
+	updated, _ := m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.options.PlainView || m.options.CleanView {
+		t.Fatalf("options after first overview toggle = %+v, want plain", m.options)
+	}
+
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.options.CleanView || m.options.PlainView {
+		t.Fatalf("options after second overview toggle = %+v, want clean", m.options)
+	}
+
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.options.CleanView || m.options.PlainView {
+		t.Fatalf("options after third overview toggle = %+v, want graph", m.options)
+	}
+
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.options.ShowTimezone {
+		t.Fatalf("ShowTimezone = false, want true")
+	}
+
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.options.ShowEmail {
+		t.Fatalf("ShowEmail = false, want true")
+	}
+
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.options.HideLineDiffs {
+		t.Fatalf("HideLineDiffs = false, want true")
+	}
+}
+
+func TestHandleSettingsKeyClosesSettings(t *testing.T) {
+	m := Model{state: ViewSettings, keys: defaultKeyMap()}
+
+	updated, _ := m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.state != ViewList {
+		t.Fatalf("state = %v, want ViewList", m.state)
+	}
+}
+
 func TestRemoveChangeRebuildsMap(t *testing.T) {
 	first := plumbing.NewHash("1111111111111111111111111111111111111111")
 	second := plumbing.NewHash("2222222222222222222222222222222222222222")

@@ -21,10 +21,11 @@ type keyMap struct {
 	Select       key.Binding
 	BatchEdit    key.Binding
 	SwitchBranch key.Binding
+	Settings     key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.SwitchBranch, k.Apply, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.SwitchBranch, k.Settings, k.Apply, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -32,7 +33,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.PageUp, k.PageDown},
 		{k.Edit, k.Drop, k.Combine, k.Undo, k.Select},
 		{k.BatchEdit, k.Reset},
-		{k.SwitchBranch, k.Apply},
+		{k.SwitchBranch, k.Settings, k.Apply},
 		{k.Quit},
 	}
 }
@@ -57,5 +58,6 @@ func defaultKeyMap() keyMap {
 		Select:       key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
 		BatchEdit:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "batch edit")),
 		SwitchBranch: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "switch branch")),
+		Settings:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "settings")),
 	}
 }

@@ -26,6 +26,17 @@ const (
 	ViewConfirm
 	ViewResult
 	ViewBranch
+	ViewSettings
+)
+
+type SettingItem int
+
+const (
+	SettingOverviewMode SettingItem = iota
+	SettingTimezone
+	SettingEmail
+	SettingLineDiffs
+	settingCount
 )
 
 type EditField int
@@ -48,6 +59,7 @@ type Model struct {
 	undoStack       [][]gitops.ForgeChange
 	selectedCommits map[string]bool
 	scrollOffset    int
+	settingsIndex   int
 
 	editingCommit *gitops.CommitInfo
 	editFields    []textinput.Model
@@ -128,13 +140,8 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 		}
 	}
 
-	items := make([]list.Item, len(commits))
-	for i, commit := range commits {
-		items[i] = commitItem{commit: commit}
-	}
-
 	delegate := commitDelegate{}
-	l := list.New(items, delegate, 80, 20)
+	l := list.New(commitListItems(commits), delegate, 80, 20)
 	l.Title = "git-backtrack"
 	l.SetShowStatusBar(true)
 	l.SetFilteringEnabled(false)
@@ -196,6 +203,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleResultKey(msg)
 		case ViewBranch:
 			return m.handleBranchKey(msg)
+		case ViewSettings:
+			return m.handleSettingsKey(msg)
 		}
 	}
 
@@ -318,6 +327,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.SwitchBranch):
 		m.state = ViewBranch
+		return m, nil
+
+	case key.Matches(msg, m.keys.Settings):
+		m.state = ViewSettings
 		return m, nil
 	}
 
@@ -587,6 +600,81 @@ func (m Model) handleBranchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.branchList, cmd = m.branchList.Update(msg)
 	return m, cmd
+}
+
+func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Quit), key.Matches(msg, m.keys.Settings):
+		m.state = ViewList
+		return m, nil
+
+	case key.Matches(msg, m.keys.Up):
+		m.settingsIndex = (m.settingsIndex + int(settingCount) - 1) % int(settingCount)
+		return m, nil
+
+	case key.Matches(msg, m.keys.Down):
+		m.settingsIndex = (m.settingsIndex + 1) % int(settingCount)
+		return m, nil
+
+	case key.Matches(msg, m.keys.Confirm), key.Matches(msg, m.keys.Select):
+		m.toggleSetting(SettingItem(m.settingsIndex))
+		m.updateListScrollOffset(m.visibleListRows())
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *Model) toggleSetting(item SettingItem) {
+	switch item {
+	case SettingOverviewMode:
+		m.cycleOverviewMode()
+	case SettingTimezone:
+		m.options.ShowTimezone = !m.options.ShowTimezone
+	case SettingEmail:
+		m.options.ShowEmail = !m.options.ShowEmail
+	case SettingLineDiffs:
+		m.options.HideLineDiffs = !m.options.HideLineDiffs
+	}
+}
+
+func (m *Model) cycleOverviewMode() {
+	switch {
+	case !m.options.disablesGraph():
+		m.options.PlainView = true
+	case m.options.PlainView:
+		m.options.PlainView = false
+		m.options.CleanView = true
+	default:
+		m.options.CleanView = false
+		if err := m.ensureGraphLoaded(); err != nil {
+			m.err = err
+		}
+	}
+}
+
+func (m *Model) ensureGraphLoaded() error {
+	if m.graph != nil && len(m.graph.Rows) > 0 {
+		return nil
+	}
+
+	var commits []gitops.CommitInfo
+	var graph *gitops.Graph
+	var err error
+	if m.currentBranch != "" {
+		commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
+	} else {
+		commits, graph, err = m.repo.ListAllCommitsWithGraph()
+	}
+	if err != nil {
+		return err
+	}
+	if graph == nil {
+		graph = &gitops.Graph{}
+	}
+	m.commits = commits
+	m.graph = graph
+	m.list.SetItems(commitListItems(commits))
+	return nil
 }
 
 func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -901,11 +989,15 @@ func (m *Model) refresh() {
 	m.editQueue = make([]gitops.ForgeChange, 0)
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	m.undoStack = nil
+	m.list.SetItems(commitListItems(commits))
+}
+
+func commitListItems(commits []gitops.CommitInfo) []list.Item {
 	items := make([]list.Item, len(commits))
 	for i, commit := range commits {
 		items[i] = commitItem{commit: commit}
 	}
-	m.list.SetItems(items)
+	return items
 }
 
 func (m Model) View() string {
@@ -926,6 +1018,8 @@ func (m Model) View() string {
 		return m.renderResultView()
 	case ViewBranch:
 		return m.renderBranchView()
+	case ViewSettings:
+		return m.renderSettingsView()
 	default:
 		return ""
 	}
@@ -1182,7 +1276,7 @@ func (m Model) listStatusText(selectedCount int) string {
 	if len(m.undoStack) > 0 {
 		parts = append(parts, "u:undo")
 	}
-	parts = append(parts, "c:switch", "a:apply", "q:quit")
+	parts = append(parts, "c:switch", "s:settings", "a:apply", "q:quit")
 	return strings.Join(parts, " ")
 }
 
@@ -1375,6 +1469,60 @@ func (m Model) renderBranchView() string {
 	b.WriteString("\n")
 	b.WriteString(statusStyle.Render("enter:select esc:cancel"))
 	return b.String()
+}
+
+func (m Model) renderSettingsView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Settings"))
+	b.WriteString("\n\n")
+
+	rows := []struct {
+		label string
+		value string
+	}{
+		{label: "Overview", value: m.overviewModeLabel()},
+		{label: "Timezone offsets", value: settingEnabledLabel(m.options.ShowTimezone)},
+		{label: "Author emails", value: settingEnabledLabel(m.options.ShowEmail)},
+		{label: "Line diffs", value: settingEnabledLabel(m.options.showsLineDiffs())},
+	}
+
+	for i, row := range rows {
+		prefix := "  "
+		labelStyleToUse := labelStyle
+		valueStyle := statusStyle
+		if i == m.settingsIndex {
+			prefix = "> "
+			labelStyleToUse = labelStyle.Background(lipgloss.Color("237"))
+			valueStyle = statusStyle.Background(lipgloss.Color("237"))
+		}
+		b.WriteString(prefix)
+		b.WriteString(labelStyleToUse.Render(row.label))
+		b.WriteString(": ")
+		b.WriteString(valueStyle.Render(row.value))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(statusStyle.Render("enter/space:toggle up/down:move s/esc/q:close"))
+	return b.String()
+}
+
+func (m Model) overviewModeLabel() string {
+	switch {
+	case m.options.CleanView:
+		return "clean"
+	case m.options.PlainView:
+		return "plain"
+	default:
+		return "graph"
+	}
+}
+
+func settingEnabledLabel(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
 }
 
 func (m Model) authorColumnWidth(folds foldDisplayIndex) int {
