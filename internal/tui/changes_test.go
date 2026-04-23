@@ -131,6 +131,99 @@ func TestHandleSettingsKeyClosesSettings(t *testing.T) {
 	}
 }
 
+func TestHandleEditKeyEnterSavesMessageField(t *testing.T) {
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.UTC
+
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	m := Model{
+		state:           ViewEdit,
+		keys:            defaultKeyMap(),
+		editingCommit:   &gitops.CommitInfo{Hash: hash, AuthorName: "Jan", AuthorEmail: "jan@example.com", AuthorDate: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC), Message: "old message"},
+		editMap:         make(map[string]*gitops.ForgeChange),
+		selectedCommits: make(map[string]bool),
+	}
+	m.initEditFields()
+	m.focusField = Message
+	m.messageField.Focus()
+	m.messageField.SetValue("new message")
+
+	updated, _ := m.handleEditKey(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if m.state != ViewList {
+		t.Fatalf("state = %v, want ViewList", m.state)
+	}
+	if len(m.editQueue) != 1 || m.editQueue[0].NewMessage != "new message" {
+		t.Fatalf("editQueue = %+v, want message change", m.editQueue)
+	}
+}
+
+func TestHandleEditKeyAltEnterInsertsMessageNewline(t *testing.T) {
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.UTC
+
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	m := Model{
+		state:           ViewEdit,
+		keys:            defaultKeyMap(),
+		editingCommit:   &gitops.CommitInfo{Hash: hash, AuthorName: "Jan", AuthorEmail: "jan@example.com", AuthorDate: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC), Message: "subject"},
+		editMap:         make(map[string]*gitops.ForgeChange),
+		selectedCommits: make(map[string]bool),
+	}
+	m.initEditFields()
+	m.focusField = Message
+	m.messageField.Focus()
+	m.messageField.SetValue("subject")
+
+	updated, _ := m.handleEditKey(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = updated.(Model)
+	if m.state != ViewEdit {
+		t.Fatalf("state = %v, want ViewEdit", m.state)
+	}
+	if !strings.Contains(m.messageField.Value(), "\n") {
+		t.Fatalf("message value = %q, want newline", m.messageField.Value())
+	}
+	if len(m.editQueue) != 0 {
+		t.Fatalf("editQueue len = %d, want 0", len(m.editQueue))
+	}
+}
+
+func TestDisplayCommitMessageStripsConflictSection(t *testing.T) {
+	message := "subject\n\nbody\n# Conflicts:\n#\tfile.go\n"
+
+	got := displayCommitMessage(message)
+	if got != "subject\n\nbody" {
+		t.Fatalf("displayCommitMessage = %q, want subject and body only", got)
+	}
+}
+
+func TestDisplayCommitMessageStripsTerminalControls(t *testing.T) {
+	message := "subject\x1b[2J\r\nbody"
+
+	got := displayCommitMessage(message)
+	if got != "subject\nbody" {
+		t.Fatalf("displayCommitMessage = %q, want controls stripped", got)
+	}
+}
+
+func TestRenderEditViewShowsCleanOriginalMessage(t *testing.T) {
+	m := Model{
+		keys:          defaultKeyMap(),
+		editingCommit: &gitops.CommitInfo{ShortHash: "1111111", AuthorName: "Jan", AuthorEmail: "jan@example.com", AuthorDate: time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC), Message: "subject\n# Conflics:\n#\tfile.go"},
+	}
+	m.initEditFields()
+
+	view := m.renderEditView()
+	if !strings.Contains(view, "subject") {
+		t.Fatalf("view missing original subject: %q", view)
+	}
+	if strings.Contains(view, "Conflics") || strings.Contains(view, "file.go") {
+		t.Fatalf("view includes conflict section: %q", view)
+	}
+}
+
 func TestRemoveChangeRebuildsMap(t *testing.T) {
 	first := plumbing.NewHash("1111111111111111111111111111111111111111")
 	second := plumbing.NewHash("2222222222222222222222222222222222222222")

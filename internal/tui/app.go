@@ -399,6 +399,7 @@ func (m *Model) initEditFields() {
 			msg = existingChange.NewMessage
 		}
 	}
+	msg = displayCommitMessage(msg)
 
 	m.editFields[FieldName] = textinput.New()
 	m.editFields[FieldName].Placeholder = "Author name"
@@ -423,6 +424,7 @@ func (m *Model) initEditFields() {
 
 	m.messageField = textarea.New()
 	m.messageField.Placeholder = "Commit message"
+	m.messageField.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter"), key.WithHelp("shift+enter", "newline"))
 	m.messageField.SetValue(msg)
 	m.messageField.SetWidth(60)
 	m.messageField.SetHeight(messageHeight(msg))
@@ -443,6 +445,52 @@ func messageHeight(msg string) int {
 		height = 10
 	}
 	return height
+}
+
+func displayCommitMessage(message string) string {
+	message = stripTerminalControls(message)
+	lines := strings.Split(message, "\n")
+	for i, line := range lines {
+		normalized := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(line), " ", ""))
+		if strings.HasPrefix(normalized, "#conflicts") || strings.HasPrefix(normalized, "#conflics") {
+			return strings.TrimRight(strings.Join(lines[:i], "\n"), "\n")
+		}
+	}
+	return message
+}
+
+func stripTerminalControls(value string) string {
+	var b strings.Builder
+	skippingEscape := false
+	skippingCSI := false
+	for _, r := range value {
+		if skippingCSI {
+			if r >= 0x40 && r <= 0x7e {
+				skippingCSI = false
+			}
+			continue
+		}
+		if skippingEscape {
+			if r == '[' {
+				skippingCSI = true
+			}
+			skippingEscape = false
+			continue
+		}
+		if r == 0x1b {
+			skippingEscape = true
+			continue
+		}
+		if r == '\n' || r == '\t' {
+			b.WriteRune(r)
+			continue
+		}
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func (m *Model) initBatchFields() {
@@ -487,9 +535,6 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Confirm):
-		if m.focusField == Message {
-			break
-		}
 		before := cloneForgeChanges(m.editQueue)
 		change := m.buildForgeChange()
 		hashStr := change.OriginalHash.String()
@@ -915,7 +960,7 @@ func (m Model) buildForgeChange() gitops.ForgeChange {
 		change.NewDate = &newDateTime
 	}
 
-	if m.messageField.Value() != m.editingCommit.Message {
+	if m.messageField.Value() != displayCommitMessage(m.editingCommit.Message) {
 		change.NewMessage = m.messageField.Value()
 	}
 
@@ -1372,11 +1417,12 @@ func (m Model) renderEditView() string {
 	b.WriteString("\n")
 	b.WriteString(statusStyle.Render("Original Message:"))
 	b.WriteString("\n")
-	b.WriteString(m.editingCommit.Message)
+	b.WriteString(displayCommitMessage(m.editingCommit.Message))
 	b.WriteString("\n\n")
 
 	b.WriteString(labelStyle.Render("[Tab]") + " next  ")
 	b.WriteString(labelStyle.Render("[Enter]") + " save  ")
+	b.WriteString(labelStyle.Render("[Shift+Enter]") + " newline  ")
 	b.WriteString(labelStyle.Render("[Esc]") + " cancel")
 
 	return b.String()
