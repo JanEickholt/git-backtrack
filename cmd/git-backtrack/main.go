@@ -21,12 +21,15 @@ func main() {
 	repoPath := flag.String("path", ".", "path to git repository")
 	showVersion := flag.Bool("version", false, "show version information")
 	debugMode := flag.Bool("debug", false, "debug mode - test git operations without TUI")
-	cleanView := flag.Bool("clean", false, "disable graph and aligned column spacing in the overview")
+	graphView := flag.Bool("graph", false, "show graph rendering in the overview")
+	cleanView := flag.Bool("clean", false, "disable graph and aligned column spacing in the overview (default)")
 	plainView := flag.Bool("plain", false, "disable graph rendering but keep aligned column spacing")
 	timezoneView := flag.Bool("timezone", false, "show timezone offsets in commit timestamps")
 	showTimezone := flag.Bool("show-timezone", false, "alias for --timezone")
 	emailView := flag.Bool("email", false, "show author emails in the overview")
 	showEmail := flag.Bool("show-email", false, "alias for --email")
+	lineDiffs := flag.Bool("line-diffs", false, "show +N/-N line diff stats in the overview")
+	showLineDiffs := flag.Bool("show-line-diffs", false, "alias for --line-diffs")
 	noLineDiffs := flag.Bool("no-line-diffs", false, "hide +N/-N line diff stats in the overview")
 	hideLineDiffs := flag.Bool("hide-line-diffs", false, "alias for --no-line-diffs")
 	flag.Parse()
@@ -77,7 +80,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: *cleanView, PlainView: *plainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail, HideLineDiffs: *noLineDiffs || *hideLineDiffs})
+	startCleanView := !*graphView && !*plainView || *cleanView
+	startPlainView := *plainView && !*cleanView
+	startLineDiffs := (*lineDiffs || *showLineDiffs) && !*noLineDiffs && !*hideLineDiffs
+	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: startCleanView, PlainView: startPlainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail, HideLineDiffs: !startLineDiffs})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
