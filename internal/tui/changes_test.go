@@ -131,6 +131,38 @@ func TestHandleSettingsKeyClosesSettings(t *testing.T) {
 	}
 }
 
+func TestRenderListFooterShowsContextActions(t *testing.T) {
+	m := Model{width: 160}
+
+	footer := m.renderListFooter(0)
+	for _, want := range []string{"up/down", "move", "e", "edit", "s", "settings"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer %q missing %q", footer, want)
+		}
+	}
+
+	footer = m.renderListFooter(2)
+	for _, want := range []string{"d", "drop", "f", "fold", "b", "batch"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("selected footer %q missing %q", footer, want)
+		}
+	}
+}
+
+func TestRenderFooterCompactsWhenNarrow(t *testing.T) {
+	footer := renderFooter([]footerAction{
+		{key: "up/down", label: "move"},
+		{key: "enter", label: "save"},
+	}, 8)
+
+	if strings.Contains(footer, "move") || strings.Contains(footer, "save") {
+		t.Fatalf("compact footer includes labels: %q", footer)
+	}
+	if !strings.Contains(footer, "up/down") || !strings.Contains(footer, "enter") {
+		t.Fatalf("compact footer missing keys: %q", footer)
+	}
+}
+
 func TestHandleEditKeyEnterSavesMessageField(t *testing.T) {
 	oldLocal := time.Local
 	t.Cleanup(func() { time.Local = oldLocal })

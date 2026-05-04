@@ -1194,7 +1194,7 @@ func (m Model) renderListView() string {
 		rowIndex++
 	}
 
-	b.WriteString(statusStyle.Render(m.listStatusText(selectedCount)))
+	b.WriteString(m.renderListFooter(selectedCount))
 	return b.String()
 }
 
@@ -1245,7 +1245,7 @@ func (m Model) renderCleanRows(b *strings.Builder, maxRows int, selectedCount in
 		visualLinesRendered++
 	}
 
-	b.WriteString(statusStyle.Render(m.listStatusText(selectedCount)))
+	b.WriteString(m.renderListFooter(selectedCount))
 }
 
 func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount int) {
@@ -1308,21 +1308,64 @@ func (m Model) renderPlainRows(b *strings.Builder, maxRows int, selectedCount in
 		visualLinesRendered++
 	}
 
-	b.WriteString(statusStyle.Render(m.listStatusText(selectedCount)))
+	b.WriteString(m.renderListFooter(selectedCount))
 }
 
-func (m Model) listStatusText(selectedCount int) string {
-	parts := []string{}
+type footerAction struct {
+	key   string
+	label string
+}
+
+func (m Model) renderListFooter(selectedCount int) string {
+	actions := []footerAction{
+		{key: "up/down", label: "move"},
+		{key: "ctrl+up/down", label: "page"},
+	}
 	if selectedCount > 0 {
-		parts = append(parts, "d:drop", "f:fold", "space:select", "b:batch")
+		actions = append(actions,
+			footerAction{key: "d", label: "drop"},
+			footerAction{key: "f", label: "fold"},
+			footerAction{key: "space", label: "select"},
+			footerAction{key: "b", label: "batch"},
+		)
 	} else {
-		parts = append(parts, "e:edit", "d:drop", "space:select", "b:batch")
+		actions = append(actions,
+			footerAction{key: "e", label: "edit"},
+			footerAction{key: "d", label: "drop"},
+			footerAction{key: "space", label: "select"},
+			footerAction{key: "b", label: "batch"},
+		)
 	}
 	if len(m.undoStack) > 0 {
-		parts = append(parts, "u:undo")
+		actions = append(actions, footerAction{key: "u", label: "undo"})
 	}
-	parts = append(parts, "c:switch", "s:settings", "a:apply", "q:quit")
-	return strings.Join(parts, " ")
+	actions = append(actions,
+		footerAction{key: "c", label: "switch"},
+		footerAction{key: "s", label: "settings"},
+		footerAction{key: "a", label: "apply"},
+		footerAction{key: "q", label: "quit"},
+	)
+	return renderFooter(actions, m.width)
+}
+
+func renderFooter(actions []footerAction, width int) string {
+	if len(actions) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		parts = append(parts, footerKeyStyle.Render(action.key)+" "+footerTextStyle.Render(action.label))
+	}
+	footer := strings.Join(parts, footerTextStyle.Render("  "))
+	if width <= 0 || lipgloss.Width(footer) <= width {
+		return footer
+	}
+
+	parts = parts[:0]
+	for _, action := range actions {
+		parts = append(parts, footerKeyStyle.Render(action.key))
+	}
+	return strings.Join(parts, footerTextStyle.Render("  "))
 }
 
 func (m Model) renderBatchEditView() string {
@@ -1364,9 +1407,11 @@ func (m Model) renderBatchEditView() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(labelStyle.Render("[Tab]") + " next  ")
-	b.WriteString(labelStyle.Render("[Enter]") + " apply  ")
-	b.WriteString(labelStyle.Render("[Esc]") + " cancel")
+	b.WriteString(renderFooter([]footerAction{
+		{key: "tab", label: "next"},
+		{key: "enter", label: "apply"},
+		{key: "esc", label: "cancel"},
+	}, m.width))
 
 	return b.String()
 }
@@ -1420,10 +1465,12 @@ func (m Model) renderEditView() string {
 	b.WriteString(displayCommitMessage(m.editingCommit.Message))
 	b.WriteString("\n\n")
 
-	b.WriteString(labelStyle.Render("[Tab]") + " next  ")
-	b.WriteString(labelStyle.Render("[Enter]") + " save  ")
-	b.WriteString(labelStyle.Render("[Shift+Enter]") + " newline  ")
-	b.WriteString(labelStyle.Render("[Esc]") + " cancel")
+	b.WriteString(renderFooter([]footerAction{
+		{key: "tab", label: "next"},
+		{key: "enter", label: "save"},
+		{key: "shift+enter", label: "newline"},
+		{key: "esc", label: "cancel"},
+	}, m.width))
 
 	return b.String()
 }
@@ -1475,8 +1522,10 @@ func (m Model) renderConfirmView() string {
 
 	b.WriteString(errorStyle.Render("This will rewrite git history!"))
 	b.WriteString("\n\n")
-	b.WriteString(labelStyle.Render("[Enter]") + " confirm  ")
-	b.WriteString(labelStyle.Render("[Esc]") + " cancel")
+	b.WriteString(renderFooter([]footerAction{
+		{key: "enter", label: "confirm"},
+		{key: "esc", label: "cancel"},
+	}, m.width))
 
 	return b.String()
 }
@@ -1513,7 +1562,10 @@ func (m Model) renderBranchView() string {
 	b.WriteString("\n\n")
 	b.WriteString(m.branchList.View())
 	b.WriteString("\n")
-	b.WriteString(statusStyle.Render("enter:select esc:cancel"))
+	b.WriteString(renderFooter([]footerAction{
+		{key: "enter", label: "select"},
+		{key: "esc", label: "cancel"},
+	}, m.width))
 	return b.String()
 }
 
@@ -1549,7 +1601,11 @@ func (m Model) renderSettingsView() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(statusStyle.Render("enter/space:toggle up/down:move s/esc/q:close"))
+	b.WriteString(renderFooter([]footerAction{
+		{key: "up/down", label: "move"},
+		{key: "enter/space", label: "toggle"},
+		{key: "s/esc/q", label: "close"},
+	}, m.width))
 	return b.String()
 }
 

@@ -11,4 +11,6 @@ var (
 	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9")).Bold(true)
 	successStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Bold(true)
 	labelStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Bold(true)
+	footerKeyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+	footerTextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
