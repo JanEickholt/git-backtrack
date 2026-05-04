@@ -1356,15 +1356,6 @@ func renderFooter(actions []footerAction, width int) string {
 	for _, action := range actions {
 		parts = append(parts, footerKeyStyle.Render(action.key)+" "+footerTextStyle.Render(action.label))
 	}
-	footer := strings.Join(parts, footerTextStyle.Render("  "))
-	if width <= 0 || lipgloss.Width(footer) <= width {
-		return footer
-	}
-
-	parts = parts[:0]
-	for _, action := range actions {
-		parts = append(parts, footerKeyStyle.Render(action.key))
-	}
 	return strings.Join(parts, footerTextStyle.Render("  "))
 }
 

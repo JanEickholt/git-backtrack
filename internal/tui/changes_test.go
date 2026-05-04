@@ -149,17 +149,16 @@ func TestRenderListFooterShowsContextActions(t *testing.T) {
 	}
 }
 
-func TestRenderFooterCompactsWhenNarrow(t *testing.T) {
+func TestRenderFooterKeepsLabelsWhenNarrow(t *testing.T) {
 	footer := renderFooter([]footerAction{
 		{key: "up/down", label: "move"},
 		{key: "enter", label: "save"},
 	}, 8)
 
-	if strings.Contains(footer, "move") || strings.Contains(footer, "save") {
-		t.Fatalf("compact footer includes labels: %q", footer)
-	}
-	if !strings.Contains(footer, "up/down") || !strings.Contains(footer, "enter") {
-		t.Fatalf("compact footer missing keys: %q", footer)
+	for _, want := range []string{"up/down", "move", "enter", "save"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer %q missing %q", footer, want)
+		}
 	}
 }
 
