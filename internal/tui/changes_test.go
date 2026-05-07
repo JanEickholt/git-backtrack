@@ -135,10 +135,13 @@ func TestRenderListFooterShowsContextActions(t *testing.T) {
 	m := Model{width: 160}
 
 	footer := m.renderListFooter(0)
-	for _, want := range []string{"up/down", "move", "e", "edit", "s", "settings"} {
+	for _, want := range []string{"e", "edit", "s", "settings"} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer %q missing %q", footer, want)
 		}
+	}
+	if strings.Contains(footer, "up/down") || strings.Contains(footer, "ctrl+up/down") || strings.Contains(footer, "move") || strings.Contains(footer, "page") {
+		t.Fatalf("footer should not explain movement keys: %q", footer)
 	}
 
 	footer = m.renderListFooter(2)

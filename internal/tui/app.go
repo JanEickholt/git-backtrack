@@ -1317,10 +1317,7 @@ type footerAction struct {
 }
 
 func (m Model) renderListFooter(selectedCount int) string {
-	actions := []footerAction{
-		{key: "up/down", label: "move"},
-		{key: "ctrl+up/down", label: "page"},
-	}
+	actions := []footerAction{}
 	if selectedCount > 0 {
 		actions = append(actions,
 			footerAction{key: "d", label: "drop"},
@@ -1354,7 +1351,11 @@ func renderFooter(actions []footerAction, width int) string {
 	}
 	parts := make([]string, 0, len(actions))
 	for _, action := range actions {
-		parts = append(parts, footerKeyStyle.Render(action.key)+" "+footerTextStyle.Render(action.label))
+		part := footerKeyStyle.Render(action.key)
+		if action.label != "" {
+			part += " " + footerTextStyle.Render(action.label)
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, footerTextStyle.Render("  "))
 }
@@ -1593,7 +1594,6 @@ func (m Model) renderSettingsView() string {
 
 	b.WriteString("\n")
 	b.WriteString(renderFooter([]footerAction{
-		{key: "up/down", label: "move"},
 		{key: "enter/space", label: "toggle"},
 		{key: "s/esc/q", label: "close"},
 	}, m.width))
