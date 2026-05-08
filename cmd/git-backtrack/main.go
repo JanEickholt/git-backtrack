@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Jan/git-backtrack/internal/gitops"
+	"github.com/Jan/git-backtrack/internal/tool"
 	"github.com/Jan/git-backtrack/internal/tui"
 )
 
@@ -18,6 +19,10 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && tool.IsCommand(os.Args[1]) {
+		os.Exit(tool.Run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+
 	repoPath := flag.String("path", ".", "path to git repository")
 	showVersion := flag.Bool("version", false, "show version information")
 	debugMode := flag.Bool("debug", false, "debug mode - test git operations without TUI")

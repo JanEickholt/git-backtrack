@@ -178,6 +178,13 @@ func (r *Repository) GetHead() (*plumbing.Reference, error) {
 	return r.repo.Head()
 }
 
+func (r *Repository) GetReference(refName string) (*plumbing.Reference, error) {
+	if err := r.Reload(); err != nil {
+		return nil, err
+	}
+	return r.repo.Reference(plumbing.ReferenceName(refName), true)
+}
+
 func (r *Repository) ListBranches() ([]string, error) {
 	branches, err := r.repo.Branches()
 	if err != nil {
