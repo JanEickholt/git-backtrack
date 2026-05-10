@@ -39,6 +39,33 @@ func TestRunListOutputsJSON(t *testing.T) {
 	}
 }
 
+func TestRunHelpOutputsToolContract(t *testing.T) {
+	var stdout bytes.Buffer
+	status := Run([]string{"help", "--json"}, &stdout, &bytes.Buffer{})
+	if status != 0 {
+		t.Fatalf("status = %d, output = %s", status, stdout.String())
+	}
+
+	var response HelpResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !response.OK {
+		t.Fatalf("response not ok: %+v", response)
+	}
+	for _, command := range []string{"help", "list", "validate", "apply"} {
+		if !hasCommandHelp(response.Commands, command) {
+			t.Fatalf("help missing command %q: %+v", command, response.Commands)
+		}
+	}
+	if response.HashRules.MinimumPrefixLength != minHashPrefixLength {
+		t.Fatalf("minimum prefix length = %d, want %d", response.HashRules.MinimumPrefixLength, minHashPrefixLength)
+	}
+	if len(response.ExamplePlan.Operations) == 0 {
+		t.Fatalf("help missing example plan operations")
+	}
+}
+
 func TestValidateResolvesUnambiguousShortHash(t *testing.T) {
 	dir := initGitRepo(t)
 	commitFile(t, dir, "file.txt", "one\n", "one")
@@ -227,4 +254,13 @@ func gitOutputErr(dir string, args ...string) (string, error) {
 
 func stringPtr(value string) *string {
 	return &value
+}
+
+func hasCommandHelp(commands []CommandHelp, name string) bool {
+	for _, command := range commands {
+		if command.Name == name {
+			return true
+		}
+	}
+	return false
 }

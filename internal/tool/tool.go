@@ -91,6 +91,49 @@ type ApplyResponse struct {
 	Errors      []Error           `json:"errors,omitempty"`
 }
 
+type HelpResponse struct {
+	OK                  bool              `json:"ok"`
+	Name                string            `json:"name"`
+	Description         string            `json:"description"`
+	Workflow            []string          `json:"workflow"`
+	Commands            []CommandHelp     `json:"commands"`
+	HashRules           HashRules         `json:"hash_rules"`
+	PlanSchema          PlanSchema        `json:"plan_schema"`
+	OperationSchemas    []OperationSchema `json:"operation_schemas"`
+	ExamplePlan         Plan              `json:"example_plan"`
+	ResponseShapes      map[string]string `json:"response_shapes"`
+	ErrorCodes          []string          `json:"error_codes"`
+	SafetyNotes         []string          `json:"safety_notes"`
+	RecommendedSequence []string          `json:"recommended_sequence"`
+}
+
+type CommandHelp struct {
+	Name        string   `json:"name"`
+	Usage       string   `json:"usage"`
+	Description string   `json:"description"`
+	Flags       []string `json:"flags"`
+}
+
+type HashRules struct {
+	MinimumPrefixLength int      `json:"minimum_prefix_length"`
+	Accepted            []string `json:"accepted"`
+	Rejected            []string `json:"rejected"`
+}
+
+type PlanSchema struct {
+	Version      string `json:"version"`
+	Ref          string `json:"ref"`
+	ExpectedHead string `json:"expected_head"`
+	Operations   string `json:"operations"`
+}
+
+type OperationSchema struct {
+	Op          string   `json:"op"`
+	Required    []string `json:"required"`
+	Optional    []string `json:"optional,omitempty"`
+	Description string   `json:"description"`
+}
+
 type validationResult struct {
 	plan       Plan
 	ref        string
@@ -106,7 +149,7 @@ type validationResult struct {
 
 func IsCommand(name string) bool {
 	switch name {
-	case "list", "validate", "apply":
+	case "help", "list", "validate", "apply":
 		return true
 	default:
 		return false
@@ -120,6 +163,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	switch args[0] {
+	case "help":
+		return runHelp(args[1:], stdout, stderr)
 	case "list":
 		return runList(args[1:], stdout, stderr)
 	case "validate":
@@ -130,6 +175,17 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "unknown tool command %q\n", args[0])
 		return 2
 	}
+}
+
+func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("help", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	_ = fs.Bool("json", true, "emit JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	writeJSON(stdout, toolHelp())
+	return 0
 }
 
 func runList(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -227,6 +283,97 @@ func runApply(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	writeJSON(stdout, ApplyResponse{OK: true, Ref: result.ref, Head: result.head, BackupRef: backupRef, ChangedRefs: changedRefsJSON(rewriteResult.ChangedRefs), Warnings: result.warnings})
 	return 0
+}
+
+func toolHelp() HelpResponse {
+	exampleMessage := "new commit message"
+	return HelpResponse{
+		OK:          true,
+		Name:        "git-backtrack tool mode",
+		Description: "JSON interface for inspecting, validating, and applying git history rewrite plans without driving the TUI.",
+		Workflow: []string{
+			"Run list --json to discover the current ref, expected_head, and commit hashes.",
+			"Create a version 1 plan using hash values from list output or unambiguous hash prefixes.",
+			"Run validate --plan plan.json --json and inspect ok/errors/resolved_operations.",
+			"Run apply --plan plan.json --json --yes only after validation succeeds and the user wants to rewrite history.",
+		},
+		Commands: []CommandHelp{
+			{Name: "help", Usage: "git-backtrack help --json", Description: "Print this machine-readable tool contract.", Flags: []string{"--json"}},
+			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main]", Description: "List reachable commits for a ref and return current head metadata.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--json"}},
+			{Name: "validate", Usage: "git-backtrack validate --path . --plan plan.json --json", Description: "Validate a rewrite plan and return normalized resolved operations.", Flags: []string{"--path <repo>", "--plan <file>", "--json"}},
+			{Name: "apply", Usage: "git-backtrack apply --path . --plan plan.json --json --yes", Description: "Validate then apply a rewrite plan. Requires --yes and creates a backup for real rewrites.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--yes"}},
+		},
+		HashRules: HashRules{
+			MinimumPrefixLength: minHashPrefixLength,
+			Accepted:            []string{"full 40-character hex commit hashes reachable from the selected ref", "hex hash prefixes of at least 7 characters that match exactly one reachable commit"},
+			Rejected:            []string{"ambiguous prefixes", "prefixes shorter than 7 characters", "non-hex strings", "hashes not reachable from the selected ref"},
+		},
+		PlanSchema: PlanSchema{
+			Version:      "integer, required, must be 1",
+			Ref:          "string, required, e.g. refs/heads/main or main",
+			ExpectedHead: "string, required, full 40-character head hash from list output",
+			Operations:   "array, required, contains edit/drop/fold operations",
+		},
+		OperationSchemas: []OperationSchema{
+			{Op: "edit", Required: []string{"op", "hash"}, Optional: []string{"author_name", "author_email", "author_date", "message"}, Description: "Edit metadata/message for one commit. author_name and author_email must be supplied together. author_date must be RFC3339."},
+			{Op: "drop", Required: []string{"op", "hash"}, Description: "Drop one commit during replay."},
+			{Op: "fold", Required: []string{"op", "hashes", "anchor"}, Description: "Fold multiple commits into one. hashes must contain at least two commits; anchor must be one of hashes and provides message/date metadata."},
+		},
+		ExamplePlan: Plan{
+			Version:      planVersion,
+			Ref:          "refs/heads/main",
+			ExpectedHead: "0123456789abcdef0123456789abcdef01234567",
+			Operations: []PlanOperation{
+				{Op: "edit", Hash: "89abcde", Message: &exampleMessage},
+				{Op: "drop", Hash: "fedcba9876543210fedcba9876543210fedcba98"},
+				{Op: "fold", Hashes: []string{"1111111", "2222222"}, Anchor: "2222222"},
+			},
+		},
+		ResponseShapes: map[string]string{
+			"list":     "{ok, ref, head, branch, commits[], errors[]}",
+			"validate": "{ok, ref, head, resolved_operations[], warnings[], errors[]}",
+			"apply":    "{ok, ref, head, backup_ref, changed_refs, warnings[], errors[]}",
+		},
+		ErrorCodes: []string{
+			"ambiguous_hash",
+			"apply_failed",
+			"author_identity_incomplete",
+			"backup_failed",
+			"confirmation_required",
+			"duplicate_operation",
+			"expected_head_mismatch",
+			"fold_anchor_not_in_group",
+			"fold_requires_multiple_commits",
+			"hash_not_found",
+			"hash_not_reachable",
+			"invalid_author_date",
+			"invalid_hash",
+			"merge_replay_unsupported",
+			"missing_expected_head",
+			"missing_hash",
+			"missing_plan",
+			"missing_ref",
+			"ref_not_checked_out",
+			"resolve_ref_failed",
+			"root_replay_unsupported",
+			"unknown_operation",
+			"unsupported_plan_version",
+		},
+		SafetyNotes: []string{
+			"apply refuses to run without --yes.",
+			"apply validates the plan before rewriting history.",
+			"apply requires the plan ref to be the checked-out HEAD ref.",
+			"apply creates refs/backtrack-backup/* before real rewrites.",
+			"No-op plans return ok without creating a backup.",
+		},
+		RecommendedSequence: []string{
+			"git-backtrack help --json",
+			"git-backtrack list --path . --json --ref main",
+			"write plan.json using ref/head/hash data from list output",
+			"git-backtrack validate --path . --plan plan.json --json",
+			"git-backtrack apply --path . --plan plan.json --json --yes",
+		},
+	}
 }
 
 func validatePlanFromPath(repoPath string, planPath string) (validationResult, int) {
