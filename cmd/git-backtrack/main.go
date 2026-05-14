@@ -44,8 +44,6 @@ func main() {
 	showEmail := flag.Bool("show-email", false, "alias for --email")
 	lineDiffs := flag.Bool("line-diffs", false, "show +N/-N line diff stats in the overview")
 	showLineDiffs := flag.Bool("show-line-diffs", false, "alias for --line-diffs")
-	noLineDiffs := flag.Bool("no-line-diffs", false, "hide +N/-N line diff stats in the overview")
-	hideLineDiffs := flag.Bool("hide-line-diffs", false, "alias for --no-line-diffs")
 	flag.Parse()
 
 	if *showVersion {
@@ -96,7 +94,7 @@ func main() {
 
 	startCleanView := !*graphView && !*plainView || *cleanView
 	startPlainView := *plainView && !*cleanView
-	startLineDiffs := (*lineDiffs || *showLineDiffs) && !*noLineDiffs && !*hideLineDiffs
+	startLineDiffs := *lineDiffs || *showLineDiffs
 	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: startCleanView, PlainView: startPlainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail, HideLineDiffs: !startLineDiffs})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
