@@ -65,6 +65,68 @@ func TestHandleListKeyCtrlArrowsMoveByPage(t *testing.T) {
 	}
 }
 
+func TestHandleListKeyParentJumpsToFirstVisibleParent(t *testing.T) {
+	child := plumbing.NewHash("1111111111111111111111111111111111111111")
+	missingParent := plumbing.NewHash("2222222222222222222222222222222222222222")
+	visibleParent := plumbing.NewHash("3333333333333333333333333333333333333333")
+	commits := []gitops.CommitInfo{
+		{Hash: child, Parents: []plumbing.Hash{missingParent, visibleParent}},
+		{Hash: plumbing.NewHash("4444444444444444444444444444444444444444")},
+		{Hash: visibleParent},
+	}
+	items := make([]list.Item, len(commits))
+	for i := range commits {
+		items[i] = commitItem{commit: commits[i]}
+	}
+	m := Model{
+		commits: commits,
+		list:    list.New(items, commitDelegate{}, 80, 20),
+		height:  3,
+		keys:    defaultKeyMap(),
+		options: Options{PlainView: true},
+	}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = updated.(Model)
+	if m.list.Index() != 2 {
+		t.Fatalf("index after p = %d, want 2", m.list.Index())
+	}
+	if m.scrollOffset != 2 {
+		t.Fatalf("scrollOffset after p = %d, want 2", m.scrollOffset)
+	}
+}
+
+func TestHandleListKeyParentJumpsWithGraphScroll(t *testing.T) {
+	child := plumbing.NewHash("1111111111111111111111111111111111111111")
+	parent := plumbing.NewHash("2222222222222222222222222222222222222222")
+	commits := []gitops.CommitInfo{{Hash: child, Parents: []plumbing.Hash{parent}}, {Hash: parent}}
+	items := make([]list.Item, len(commits))
+	for i := range commits {
+		items[i] = commitItem{commit: commits[i]}
+	}
+	m := Model{
+		commits: commits,
+		graph: &gitops.Graph{Rows: []gitops.GraphRow{
+			{IsCommit: true, CommitIndex: 0},
+			{},
+			{},
+			{IsCommit: true, CommitIndex: 1},
+		}},
+		list:   list.New(items, commitDelegate{}, 80, 20),
+		height: 3,
+		keys:   defaultKeyMap(),
+	}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}})
+	m = updated.(Model)
+	if m.list.Index() != 1 {
+		t.Fatalf("index after p = %d, want 1", m.list.Index())
+	}
+	if m.scrollOffset != 3 {
+		t.Fatalf("graph scrollOffset after p = %d, want 3", m.scrollOffset)
+	}
+}
+
 func TestHandleListKeySettingsOpensSettings(t *testing.T) {
 	m := Model{keys: defaultKeyMap()}
 

@@ -7,6 +7,7 @@ type keyMap struct {
 	Down         key.Binding
 	PageUp       key.Binding
 	PageDown     key.Binding
+	Parent       key.Binding
 	Edit         key.Binding
 	Drop         key.Binding
 	Combine      key.Binding
@@ -25,12 +26,12 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.SwitchBranch, k.Settings, k.Apply, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Parent, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.SwitchBranch, k.Settings, k.Apply, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown},
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.Parent},
 		{k.Edit, k.Drop, k.Combine, k.Undo, k.Select},
 		{k.BatchEdit, k.Reset},
 		{k.SwitchBranch, k.Settings, k.Apply},
@@ -44,6 +45,7 @@ func defaultKeyMap() keyMap {
 		Down:         key.NewBinding(key.WithKeys("down", "j"), key.WithHelp("↓/j", "down")),
 		PageUp:       key.NewBinding(key.WithKeys("ctrl+up"), key.WithHelp("ctrl+↑", "page up")),
 		PageDown:     key.NewBinding(key.WithKeys("ctrl+down"), key.WithHelp("ctrl+↓", "page down")),
+		Parent:       key.NewBinding(key.WithKeys("p"), key.WithHelp("p", "parent")),
 		Edit:         key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit")),
 		Drop:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drop")),
 		Combine:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fold")),

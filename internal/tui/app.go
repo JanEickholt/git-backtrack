@@ -231,6 +231,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.moveListPage(1)
 		return m, nil
 
+	case key.Matches(msg, m.keys.Parent):
+		m.jumpToParent()
+		return m, nil
+
 	case key.Matches(msg, m.keys.Edit):
 		if len(m.commits) == 0 {
 			return m, nil
@@ -352,6 +356,22 @@ func (m *Model) moveListPage(direction int) {
 	}
 	m.list.Select(targetIndex)
 	m.updateListScrollOffset(maxRows)
+}
+
+func (m *Model) jumpToParent() {
+	idx := m.list.Index()
+	if idx < 0 || idx >= len(m.commits) {
+		return
+	}
+	for _, parent := range m.commits[idx].Parents {
+		for parentIndex, commit := range m.commits {
+			if commit.Hash == parent {
+				m.list.Select(parentIndex)
+				m.updateListScrollOffset(m.visibleListRows())
+				return
+			}
+		}
+	}
 }
 
 func (m *Model) updateListScrollOffset(maxRows int) {
@@ -1328,6 +1348,7 @@ func (m Model) renderListFooter(selectedCount int) string {
 	} else {
 		actions = append(actions,
 			footerAction{key: "e", label: "edit"},
+			footerAction{key: "p", label: "parent"},
 			footerAction{key: "d", label: "drop"},
 			footerAction{key: "space", label: "select"},
 			footerAction{key: "b", label: "batch"},
