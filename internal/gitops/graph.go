@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -471,6 +472,8 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
 	authorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	dateStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	addStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
 
@@ -478,6 +481,8 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 		hashStyle = hashStyle.Background(bg)
 		authorStyle = authorStyle.Background(bg)
 		dateStyle = dateStyle.Background(bg)
+		addStyle = addStyle.Background(bg)
+		delStyle = delStyle.Background(bg)
 		msgStyle = msgStyle.Background(bg)
 		sepStyle = sepStyle.Background(bg)
 	}
@@ -488,16 +493,21 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 		message = message[:idx]
 	}
 
-	staticWidth := len(commit.ShortHash) + 2 + len(commit.AuthorName) + 2 + len(dateStr) + 2
+	statsStr := fmt.Sprintf("+%d -%d", commit.Additions, commit.Deletions)
+
+	staticWidth := len(commit.ShortHash) + 2 + len(commit.AuthorName) + 2 + len(dateStr) + 2 + len(statsStr) + 2
 	availableForMsg := width - staticWidth - suffixWidth
 	if availableForMsg > 0 && len(message) > availableForMsg {
 		message = message[:availableForMsg-3] + "..."
 	}
 
 	sep := sepStyle.Render("  ")
+	addPart := addStyle.Render(fmt.Sprintf("+%d", commit.Additions))
+	delPart := delStyle.Render(fmt.Sprintf("-%d", commit.Deletions))
 	line := hashStyle.Render(commit.ShortHash) + sep +
 		authorStyle.Render(commit.AuthorName) + sep +
 		dateStyle.Render(dateStr) + sep +
+		addPart + " " + delPart + sep +
 		msgStyle.Render(message)
 
 	if highlight {
