@@ -103,19 +103,29 @@ func (r *Repository) ListCommitsFromRef(refName string) ([]CommitInfo, error) {
 }
 
 func (r *Repository) ListAllCommitsWithGraph() ([]CommitInfo, *Graph, error) {
-	return r.listCommitsWithGraph("--exclude=refs/backtrack-backup/*", "--all")
+	return r.ListAllCommitsWithGraphOrder(DefaultGraphOrder())
 }
 
 func (r *Repository) ListCommitsFromRefWithGraph(refName string) ([]CommitInfo, *Graph, error) {
-	return r.listCommitsWithGraph(refName)
+	return r.ListCommitsFromRefWithGraphOrder(refName, DefaultGraphOrder())
 }
 
-func (r *Repository) listCommitsWithGraph(refArgs ...string) ([]CommitInfo, *Graph, error) {
+func (r *Repository) ListAllCommitsWithGraphOrder(order GraphOrder) ([]CommitInfo, *Graph, error) {
+	return r.listCommitsWithGraph(order, "--exclude=refs/backtrack-backup/*", "--all")
+}
+
+func (r *Repository) ListCommitsFromRefWithGraphOrder(refName string, order GraphOrder) ([]CommitInfo, *Graph, error) {
+	return r.listCommitsWithGraph(order, refName)
+}
+
+func (r *Repository) listCommitsWithGraph(order GraphOrder, refArgs ...string) ([]CommitInfo, *Graph, error) {
 	if err := r.Reload(); err != nil {
 		return nil, nil, err
 	}
 
-	args := []string{"log", "--no-color", "--graph", "--topo-order", "--format=" + graphCommitMarker + "%H"}
+	args := []string{"log", "--no-color", "--graph"}
+	args = append(args, order.GitLogArgs()...)
+	args = append(args, "--format="+graphCommitMarker+"%H")
 	args = append(args, refArgs...)
 	output, err := r.gitOutput(args...)
 	if err != nil {

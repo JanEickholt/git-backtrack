@@ -160,6 +160,8 @@ func TestHandleSettingsKeyTogglesSettings(t *testing.T) {
 
 	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyDown})
 	m = updated.(Model)
+	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyDown})
+	m = updated.(Model)
 	updated, _ = m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if !m.options.ShowTimezone {
@@ -180,6 +182,18 @@ func TestHandleSettingsKeyTogglesSettings(t *testing.T) {
 	m = updated.(Model)
 	if !m.options.HideLineDiffs {
 		t.Fatalf("HideLineDiffs = false, want true")
+	}
+}
+
+func TestHandleSettingsKeyCyclesGraphOrder(t *testing.T) {
+	m := Model{state: ViewSettings, keys: defaultKeyMap(), options: Options{CleanView: true}, settingsIndex: int(SettingGraphOrder)}
+
+	for _, want := range []gitops.GraphOrder{gitops.GraphOrderDate, gitops.GraphOrderAuthorDate, gitops.GraphOrderFirstParent, gitops.GraphOrderTopo} {
+		updated, _ := m.handleSettingsKey(tea.KeyMsg{Type: tea.KeyEnter})
+		m = updated.(Model)
+		if m.options.GraphOrder != want {
+			t.Fatalf("GraphOrder = %q, want %q", m.options.GraphOrder, want)
+		}
 	}
 }
 

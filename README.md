@@ -20,11 +20,14 @@ The default view is clean and compact. Optional display flags are available when
 
 ```sh
 git-backtrack --graph
+git-backtrack --graph --graph-order author-date
 git-backtrack --plain
 git-backtrack --timezone
 git-backtrack --email
 git-backtrack --line-diffs
 ```
+
+Graph order can be `topo`, `date`, `author-date`, or `first-parent`.
 
 Inside the TUI, press `s` to toggle display settings at runtime.
 

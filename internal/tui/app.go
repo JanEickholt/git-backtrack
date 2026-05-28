@@ -33,6 +33,7 @@ type SettingItem int
 
 const (
 	SettingOverviewMode SettingItem = iota
+	SettingGraphOrder
 	SettingTimezone
 	SettingEmail
 	SettingLineDiffs
@@ -88,6 +89,7 @@ type Options struct {
 	ShowTimezone  bool
 	ShowEmail     bool
 	HideLineDiffs bool
+	GraphOrder    gitops.GraphOrder
 }
 
 func (o Options) disablesGraph() bool {
@@ -103,6 +105,7 @@ func NewModel(repo *gitops.Repository) Model {
 }
 
 func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
+	options.GraphOrder = normalizedGraphOrder(options.GraphOrder)
 	headRef, _ := repo.GetHead()
 	currentBranch := ""
 	if headRef != nil && headRef.Name().IsBranch() {
@@ -116,12 +119,12 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 		if options.disablesGraph() {
 			commits, err = repo.ListCommitsFromRef("refs/heads/" + currentBranch)
 		} else {
-			commits, graph, err = repo.ListCommitsFromRefWithGraph("refs/heads/" + currentBranch)
+			commits, graph, err = repo.ListCommitsFromRefWithGraphOrder("refs/heads/"+currentBranch, options.GraphOrder)
 		}
 	} else if options.disablesGraph() {
 		commits, err = repo.ListAllCommits()
 	} else {
-		commits, graph, err = repo.ListAllCommitsWithGraph()
+		commits, graph, err = repo.ListAllCommitsWithGraphOrder(options.GraphOrder)
 	}
 	if graph == nil {
 		graph = &gitops.Graph{}
@@ -693,6 +696,8 @@ func (m *Model) toggleSetting(item SettingItem) {
 	switch item {
 	case SettingOverviewMode:
 		m.cycleOverviewMode()
+	case SettingGraphOrder:
+		m.cycleGraphOrder()
 	case SettingTimezone:
 		m.options.ShowTimezone = !m.options.ShowTimezone
 	case SettingEmail:
@@ -700,6 +705,14 @@ func (m *Model) toggleSetting(item SettingItem) {
 	case SettingLineDiffs:
 		m.options.HideLineDiffs = !m.options.HideLineDiffs
 	}
+}
+
+func normalizedGraphOrder(order gitops.GraphOrder) gitops.GraphOrder {
+	normalized, err := gitops.ParseGraphOrder(string(order))
+	if err != nil {
+		return gitops.DefaultGraphOrder()
+	}
+	return normalized
 }
 
 func (m *Model) cycleOverviewMode() {
@@ -717,6 +730,16 @@ func (m *Model) cycleOverviewMode() {
 	}
 }
 
+func (m *Model) cycleGraphOrder() {
+	m.options.GraphOrder = m.options.GraphOrder.Next()
+	m.graph = &gitops.Graph{}
+	if !m.options.disablesGraph() {
+		if err := m.ensureGraphLoaded(); err != nil {
+			m.err = err
+		}
+	}
+}
+
 func (m *Model) ensureGraphLoaded() error {
 	if m.graph != nil && len(m.graph.Rows) > 0 {
 		return nil
@@ -726,9 +749,9 @@ func (m *Model) ensureGraphLoaded() error {
 	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
-		commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
+		commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrder("refs/heads/"+m.currentBranch, m.options.GraphOrder)
 	} else {
-		commits, graph, err = m.repo.ListAllCommitsWithGraph()
+		commits, graph, err = m.repo.ListAllCommitsWithGraphOrder(m.options.GraphOrder)
 	}
 	if err != nil {
 		return err
@@ -1036,12 +1059,12 @@ func (m *Model) refresh() {
 		if m.options.disablesGraph() {
 			commits, err = m.repo.ListCommitsFromRef("refs/heads/" + m.currentBranch)
 		} else {
-			commits, graph, err = m.repo.ListCommitsFromRefWithGraph("refs/heads/" + m.currentBranch)
+			commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrder("refs/heads/"+m.currentBranch, m.options.GraphOrder)
 		}
 	} else if m.options.disablesGraph() {
 		commits, err = m.repo.ListAllCommits()
 	} else {
-		commits, graph, err = m.repo.ListAllCommitsWithGraph()
+		commits, graph, err = m.repo.ListAllCommitsWithGraphOrder(m.options.GraphOrder)
 	}
 	if err != nil {
 		return
@@ -1592,6 +1615,7 @@ func (m Model) renderSettingsView() string {
 		value string
 	}{
 		{label: "Overview", value: m.overviewModeLabel()},
+		{label: "Graph order", value: m.options.GraphOrder.Label()},
 		{label: "Timezone offsets", value: settingEnabledLabel(m.options.ShowTimezone)},
 		{label: "Author emails", value: settingEnabledLabel(m.options.ShowEmail)},
 		{label: "Line diffs", value: settingEnabledLabel(m.options.showsLineDiffs())},

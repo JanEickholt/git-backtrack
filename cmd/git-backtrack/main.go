@@ -36,6 +36,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "show version information")
 	debugMode := flag.Bool("debug", false, "debug mode - test git operations without TUI")
 	graphView := flag.Bool("graph", false, "show graph rendering in the overview")
+	graphOrderValue := flag.String("graph-order", "topo", "graph order: topo, date, author-date, or first-parent")
 	cleanView := flag.Bool("clean", false, "disable graph and aligned column spacing in the overview (default)")
 	plainView := flag.Bool("plain", false, "disable graph rendering but keep aligned column spacing")
 	timezoneView := flag.Bool("timezone", false, "show timezone offsets in commit timestamps")
@@ -49,6 +50,12 @@ func main() {
 	if *showVersion {
 		fmt.Printf("git-backtrack %s (commit: %s, built: %s)\n", version, commit, date)
 		os.Exit(0)
+	}
+
+	graphOrder, err := gitops.ParseGraphOrder(*graphOrderValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(2)
 	}
 
 	repo, err := gitops.Open(*repoPath)
@@ -95,7 +102,7 @@ func main() {
 	startCleanView := !*graphView && !*plainView || *cleanView
 	startPlainView := *plainView && !*cleanView
 	startLineDiffs := *lineDiffs || *showLineDiffs
-	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: startCleanView, PlainView: startPlainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail, HideLineDiffs: !startLineDiffs})
+	model := tui.NewModelWithOptions(repo, tui.Options{CleanView: startCleanView, PlainView: startPlainView, ShowTimezone: *timezoneView || *showTimezone, ShowEmail: *emailView || *showEmail, HideLineDiffs: !startLineDiffs, GraphOrder: graphOrder})
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
