@@ -54,6 +54,7 @@ type Model struct {
 	state           ViewState
 	repo            *gitops.Repository
 	commits         []gitops.CommitInfo
+	authorHistory   []gitops.CommitInfo
 	graph           *gitops.Graph
 	editQueue       []gitops.ForgeChange
 	editMap         map[string]*gitops.ForgeChange
@@ -69,6 +70,7 @@ type Model struct {
 
 	batchFields []textinput.Model
 	batchFocus  int
+	completeIdx int
 
 	result  *gitops.RewriteResult
 	err     error
@@ -162,10 +164,13 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 	bl.SetFilteringEnabled(false)
 	bl.Styles.Title = titleStyle
 
+	authorHistory := loadAuthorHistory(repo, currentBranch, commits)
+
 	return Model{
 		state:           ViewList,
 		repo:            repo,
 		commits:         commits,
+		authorHistory:   authorHistory,
 		graph:           graph,
 		editQueue:       make([]gitops.ForgeChange, 0),
 		editMap:         make(map[string]*gitops.ForgeChange),
@@ -177,6 +182,17 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 		currentBranch:   currentBranch,
 		branchList:      bl,
 	}
+}
+
+func loadAuthorHistory(repo *gitops.Repository, currentBranch string, fallback []gitops.CommitInfo) []gitops.CommitInfo {
+	if currentBranch == "" {
+		return fallback
+	}
+	commits, err := repo.ListAllCommits()
+	if err != nil {
+		return fallback
+	}
+	return commits
 }
 
 func (m Model) Init() tea.Cmd {
@@ -453,6 +469,7 @@ func (m *Model) initEditFields() {
 	m.messageField.SetHeight(messageHeight(msg))
 
 	m.focusField = FieldName
+	m.completeIdx = 0
 }
 
 func messageHeight(msg string) int {
@@ -546,6 +563,7 @@ func (m *Model) initBatchFields() {
 	m.batchFields[4].Width = 40
 
 	m.batchFocus = 0
+	m.completeIdx = 0
 }
 
 func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -606,6 +624,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editFields[m.focusField].Blur()
 		}
 		m.focusField = (m.focusField + 1) % 5
+		m.completeIdx = 0
 		if m.focusField == Message {
 			m.messageField.Focus()
 		} else {
@@ -620,20 +639,69 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editFields[m.focusField].Blur()
 		}
 		m.focusField = (m.focusField + 4) % 5
+		m.completeIdx = 0
 		if m.focusField == Message {
 			m.messageField.Focus()
 		} else {
 			m.editFields[m.focusField].Focus()
 		}
 		return m, nil
+
+	case key.Matches(msg, m.keys.CompleteNext):
+		if m.moveEditCompletion(1) {
+			return m, nil
+		}
+
+	case key.Matches(msg, m.keys.CompletePrev):
+		if m.moveEditCompletion(-1) {
+			return m, nil
+		}
+
+	case key.Matches(msg, m.keys.CompletePick):
+		if m.acceptEditCompletion() {
+			return m, nil
+		}
 	}
 
 	if m.focusField == Message {
 		m.messageField, cmd = m.messageField.Update(msg)
 	} else {
+		before := m.editFields[m.focusField].Value()
 		m.editFields[m.focusField], cmd = m.editFields[m.focusField].Update(msg)
+		if m.editFields[m.focusField].Value() != before {
+			m.completeIdx = 0
+		}
 	}
 	return m, cmd
+}
+
+func (m Model) editCompletionCandidates() ([]string, bool) {
+	kind, ok := editCompletionKind(m.focusField)
+	if !ok || int(m.focusField) >= len(m.editFields) {
+		return nil, false
+	}
+	candidates := authorCompletionCandidates(m.completionCommits(), kind, m.editFields[m.focusField].Value(), maxAuthorCompletions)
+	return candidates, len(candidates) > 0
+}
+
+func (m *Model) moveEditCompletion(direction int) bool {
+	candidates, ok := m.editCompletionCandidates()
+	if !ok {
+		return false
+	}
+	m.completeIdx = normalizedCompletionIndex(m.completeIdx+direction, candidates)
+	return true
+}
+
+func (m *Model) acceptEditCompletion() bool {
+	candidates, ok := m.editCompletionCandidates()
+	if !ok {
+		return false
+	}
+	m.completeIdx = normalizedCompletionIndex(m.completeIdx, candidates)
+	m.editFields[m.focusField].SetValue(candidates[m.completeIdx])
+	m.completeIdx = 0
+	return true
 }
 
 func (m Model) handleBranchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -760,6 +828,7 @@ func (m *Model) ensureGraphLoaded() error {
 		graph = &gitops.Graph{}
 	}
 	m.commits = commits
+	m.authorHistory = loadAuthorHistory(m.repo, m.currentBranch, commits)
 	m.graph = graph
 	m.list.SetItems(commitListItems(commits))
 	return nil
@@ -779,20 +848,77 @@ func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Tab):
 			m.batchFields[m.batchFocus].Blur()
 			m.batchFocus = (m.batchFocus + 1) % 5
+			m.completeIdx = 0
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
 
 		case key.Matches(msg, m.keys.ShiftTab):
 			m.batchFields[m.batchFocus].Blur()
 			m.batchFocus = (m.batchFocus + 4) % 5
+			m.completeIdx = 0
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
+
+		case key.Matches(msg, m.keys.CompleteNext):
+			if m.moveBatchCompletion(1) {
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.CompletePrev):
+			if m.moveBatchCompletion(-1) {
+				return m, nil
+			}
+
+		case key.Matches(msg, m.keys.CompletePick):
+			if m.acceptBatchCompletion() {
+				return m, nil
+			}
 		}
 	}
 
 	var cmd tea.Cmd
+	before := m.batchFields[m.batchFocus].Value()
 	m.batchFields[m.batchFocus], cmd = m.batchFields[m.batchFocus].Update(msg)
+	if m.batchFields[m.batchFocus].Value() != before {
+		m.completeIdx = 0
+	}
 	return m, cmd
+}
+
+func (m Model) batchCompletionCandidates() ([]string, bool) {
+	kind, ok := batchCompletionKind(m.batchFocus)
+	if !ok || m.batchFocus >= len(m.batchFields) {
+		return nil, false
+	}
+	candidates := authorCompletionCandidates(m.completionCommits(), kind, m.batchFields[m.batchFocus].Value(), maxAuthorCompletions)
+	return candidates, len(candidates) > 0
+}
+
+func (m Model) completionCommits() []gitops.CommitInfo {
+	if len(m.authorHistory) > 0 {
+		return m.authorHistory
+	}
+	return m.commits
+}
+
+func (m *Model) moveBatchCompletion(direction int) bool {
+	candidates, ok := m.batchCompletionCandidates()
+	if !ok {
+		return false
+	}
+	m.completeIdx = normalizedCompletionIndex(m.completeIdx+direction, candidates)
+	return true
+}
+
+func (m *Model) acceptBatchCompletion() bool {
+	candidates, ok := m.batchCompletionCandidates()
+	if !ok {
+		return false
+	}
+	m.completeIdx = normalizedCompletionIndex(m.completeIdx, candidates)
+	m.batchFields[m.batchFocus].SetValue(candidates[m.completeIdx])
+	m.completeIdx = 0
+	return true
 }
 
 func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
@@ -1073,6 +1199,7 @@ func (m *Model) refresh() {
 		graph = &gitops.Graph{}
 	}
 	m.commits = commits
+	m.authorHistory = loadAuthorHistory(m.repo, m.currentBranch, commits)
 	m.graph = graph
 	m.editQueue = make([]gitops.ForgeChange, 0)
 	m.editMap = make(map[string]*gitops.ForgeChange)
@@ -1439,15 +1566,26 @@ func (m Model) renderBatchEditView() string {
 		b.WriteString(prefix + labelStyle.Render(labels[i]+": "))
 		b.WriteString(input.View())
 		b.WriteString(" " + statusStyle.Render(placeholders[i]))
-		b.WriteString("\n\n")
+		b.WriteString("\n")
+		if i == m.batchFocus {
+			if line := m.renderBatchCompletionLine(); line != "" {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+		}
+		b.WriteString("\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(renderFooter([]footerAction{
+	actions := []footerAction{
 		{key: "tab", label: "next"},
 		{key: "enter", label: "apply"},
 		{key: "esc", label: "cancel"},
-	}, m.width))
+	}
+	if _, ok := batchCompletionKind(m.batchFocus); ok {
+		actions = append([]footerAction{{key: "ctrl+n/p", label: "complete"}, {key: "ctrl+y", label: "accept"}}, actions...)
+	}
+	b.WriteString(renderFooter(actions, m.width))
 
 	return b.String()
 }
@@ -1474,7 +1612,14 @@ func (m Model) renderEditView() string {
 		} else {
 			b.WriteString(statusStyle.Render(input.View()))
 		}
-		b.WriteString("\n\n")
+		b.WriteString("\n")
+		if i == int(m.focusField) {
+			if line := m.renderEditCompletionLine(); line != "" {
+				b.WriteString(line)
+				b.WriteString("\n")
+			}
+		}
+		b.WriteString("\n")
 	}
 
 	prefix := "  "
@@ -1501,14 +1646,51 @@ func (m Model) renderEditView() string {
 	b.WriteString(displayCommitMessage(m.editingCommit.Message))
 	b.WriteString("\n\n")
 
-	b.WriteString(renderFooter([]footerAction{
+	actions := []footerAction{
 		{key: "tab", label: "next"},
 		{key: "enter", label: "save"},
 		{key: "shift+enter", label: "newline"},
 		{key: "esc", label: "cancel"},
-	}, m.width))
+	}
+	if _, ok := editCompletionKind(m.focusField); ok {
+		actions = append([]footerAction{{key: "ctrl+n/p", label: "complete"}, {key: "ctrl+y", label: "accept"}}, actions...)
+	}
+	b.WriteString(renderFooter(actions, m.width))
 
 	return b.String()
+}
+
+func (m Model) renderEditCompletionLine() string {
+	candidates, ok := m.editCompletionCandidates()
+	if !ok {
+		return ""
+	}
+	return renderCompletionLine(candidates, m.completeIdx)
+}
+
+func (m Model) renderBatchCompletionLine() string {
+	candidates, ok := m.batchCompletionCandidates()
+	if !ok {
+		return ""
+	}
+	return renderCompletionLine(candidates, m.completeIdx)
+}
+
+func renderCompletionLine(candidates []string, selected int) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	selected = normalizedCompletionIndex(selected, candidates)
+	parts := make([]string, 0, len(candidates))
+	for i, candidate := range candidates {
+		text := " " + candidate + " "
+		if i == selected {
+			parts = append(parts, completeHitStyle.Render(text))
+		} else {
+			parts = append(parts, completeStyle.Render(text))
+		}
+	}
+	return "    " + completeStyle.Render("complete ") + strings.Join(parts, completeStyle.Render(" "))
 }
 
 func (m Model) renderConfirmView() string {

@@ -23,6 +23,9 @@ type keyMap struct {
 	BatchEdit    key.Binding
 	SwitchBranch key.Binding
 	Settings     key.Binding
+	CompleteNext key.Binding
+	CompletePrev key.Binding
+	CompletePick key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -61,5 +64,8 @@ func defaultKeyMap() keyMap {
 		BatchEdit:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "batch edit")),
 		SwitchBranch: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "switch branch")),
 		Settings:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "settings")),
+		CompleteNext: key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "next completion")),
+		CompletePrev: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "prev completion")),
+		CompletePick: key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "accept completion")),
 	}
 }
