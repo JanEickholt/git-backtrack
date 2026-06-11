@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,87 +17,91 @@ func formatCommitTime(t time.Time, showTimezone bool) string {
 }
 
 func adjustTime(original time.Time, adjustment string) (time.Time, error) {
-	adj := strings.TrimSpace(adjustment)
-	if len(adj) < 2 {
+	duration, ok := parseDuration(adjustment)
+	if !ok {
 		return original, fmt.Errorf("invalid time adjustment")
-	}
-
-	sign := 1
-	if adj[0] == '-' {
-		sign = -1
-		adj = adj[1:]
-	} else if adj[0] == '+' {
-		adj = adj[1:]
-	}
-
-	var amount int
-	var unit string
-	if _, err := fmt.Sscanf(adj, "%d%s", &amount, &unit); err != nil {
-		return original, fmt.Errorf("invalid time adjustment format")
-	}
-
-	duration := time.Duration(amount)
-	switch unit {
-	case "s", "sec", "second", "seconds":
-		duration *= time.Second
-	case "m", "min", "minute", "minutes":
-		duration *= time.Minute
-	case "h", "hour", "hours":
-		duration *= time.Hour
-	case "d", "day", "days":
-		duration *= 24 * time.Hour
-	case "w", "week", "weeks":
-		duration *= 7 * 24 * time.Hour
-	default:
-		return original, fmt.Errorf("unknown time unit: %s", unit)
-	}
-
-	if sign < 0 {
-		return original.Add(-duration), nil
 	}
 	return original.Add(duration), nil
 }
 
 func parseDuration(adjustment string) (time.Duration, bool) {
 	adj := strings.TrimSpace(adjustment)
-	if len(adj) < 2 {
+	if adj == "" {
 		return 0, false
 	}
 
-	sign := 1
-	if adj[0] == '-' {
-		sign = -1
-		adj = adj[1:]
-	} else if adj[0] == '+' {
-		adj = adj[1:]
-	}
+	var total time.Duration
+	i := 0
+	for i < len(adj) {
+		for i < len(adj) && adj[i] == ' ' {
+			i++
+		}
+		if i >= len(adj) {
+			break
+		}
 
-	var amount int
-	var unit string
-	if _, err := fmt.Sscanf(adj, "%d%s", &amount, &unit); err != nil {
-		return 0, false
-	}
+		sign := int64(1)
+		if adj[i] == '-' {
+			sign = -1
+			i++
+		} else if adj[i] == '+' {
+			i++
+		}
+		for i < len(adj) && adj[i] == ' ' {
+			i++
+		}
 
-	duration := time.Duration(amount)
+		amountStart := i
+		for i < len(adj) && adj[i] >= '0' && adj[i] <= '9' {
+			i++
+		}
+		if amountStart == i {
+			return 0, false
+		}
+		amount, err := strconv.ParseInt(adj[amountStart:i], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+
+		unitStart := i
+		for i < len(adj) && ((adj[i] >= 'a' && adj[i] <= 'z') || (adj[i] >= 'A' && adj[i] <= 'Z')) {
+			i++
+		}
+		if unitStart == i {
+			return 0, false
+		}
+		unit := strings.ToLower(adj[unitStart:i])
+		unitDuration, ok := durationUnit(unit)
+		if !ok {
+			return 0, false
+		}
+		total += time.Duration(sign*amount) * unitDuration
+
+		for i < len(adj) && adj[i] == ' ' {
+			i++
+		}
+		if i < len(adj) && adj[i] != '+' && adj[i] != '-' && (adj[i] < '0' || adj[i] > '9') {
+			return 0, false
+		}
+	}
+	return total, true
+}
+
+func durationUnit(unit string) (time.Duration, bool) {
 	switch unit {
 	case "s", "sec", "second", "seconds":
-		duration *= time.Second
+		return time.Second, true
 	case "m", "min", "minute", "minutes":
-		duration *= time.Minute
+		return time.Minute, true
 	case "h", "hour", "hours":
-		duration *= time.Hour
+		return time.Hour, true
 	case "d", "day", "days":
-		duration *= 24 * time.Hour
+		return 24 * time.Hour, true
 	case "w", "week", "weeks":
-		duration *= 7 * 24 * time.Hour
+		return 7 * 24 * time.Hour, true
 	default:
 		return 0, false
 	}
-
-	if sign < 0 {
-		return -duration, true
-	}
-	return duration, true
 }
 
 func formatPositiveTimeAdjustment(duration time.Duration) string {

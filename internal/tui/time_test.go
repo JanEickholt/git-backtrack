@@ -26,6 +26,44 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
+func TestParseDurationAcceptsCompoundExpressions(t *testing.T) {
+	duration, ok := parseDuration("5000s + 1000s + 1h")
+	if !ok {
+		t.Fatalf("parseDuration returned ok=false")
+	}
+	if duration != 9600*time.Second {
+		t.Fatalf("duration = %s, want 9600s", duration)
+	}
+
+	duration, ok = parseDuration("1h - 30m + 15sec")
+	if !ok {
+		t.Fatalf("parseDuration returned ok=false")
+	}
+	if duration != 30*time.Minute+15*time.Second {
+		t.Fatalf("duration = %s, want 30m15s", duration)
+	}
+}
+
+func TestParseDurationRejectsTrailingInput(t *testing.T) {
+	for _, input := range []string{"5000s + nope", "1h trailing", "1h +", "1h + 2"} {
+		if duration, ok := parseDuration(input); ok {
+			t.Fatalf("parseDuration(%q) = %s, true; want false", input, duration)
+		}
+	}
+}
+
+func TestAdjustTimeAcceptsCompoundExpressions(t *testing.T) {
+	original := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	adjusted, err := adjustTime(original, "5000s + 1000s + 1h")
+	if err != nil {
+		t.Fatalf("adjustTime: %v", err)
+	}
+	if !adjusted.Equal(original.Add(9600 * time.Second)) {
+		t.Fatalf("adjusted = %s, want %s", adjusted, original.Add(9600*time.Second))
+	}
+}
+
 func TestFormatPositiveTimeAdjustment(t *testing.T) {
 	if got := formatPositiveTimeAdjustment(2 * time.Second); got != "+2s" {
 		t.Fatalf("adjustment = %q, want +2s", got)
