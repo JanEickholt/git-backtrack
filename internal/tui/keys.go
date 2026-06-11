@@ -21,6 +21,7 @@ type keyMap struct {
 	ShiftTab     key.Binding
 	Select       key.Binding
 	BatchEdit    key.Binding
+	TimingFix    key.Binding
 	SwitchBranch key.Binding
 	Settings     key.Binding
 	CompleteNext key.Binding
@@ -29,14 +30,14 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Parent, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.SwitchBranch, k.Settings, k.Apply, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Parent, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.TimingFix, k.SwitchBranch, k.Settings, k.Apply, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Parent},
 		{k.Edit, k.Drop, k.Combine, k.Undo, k.Select},
-		{k.BatchEdit, k.Reset},
+		{k.BatchEdit, k.TimingFix, k.Reset},
 		{k.SwitchBranch, k.Settings, k.Apply},
 		{k.Quit},
 	}
@@ -62,7 +63,8 @@ func defaultKeyMap() keyMap {
 		ShiftTab:     key.NewBinding(key.WithKeys("shift+tab"), key.WithHelp("shift+tab", "prev")),
 		Select:       key.NewBinding(key.WithKeys(" "), key.WithHelp("space", "select")),
 		BatchEdit:    key.NewBinding(key.WithKeys("b"), key.WithHelp("b", "batch edit")),
-		SwitchBranch: key.NewBinding(key.WithKeys("c"), key.WithHelp("c", "switch branch")),
+		TimingFix:    key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "fix time")),
+		SwitchBranch: key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "switch branch")),
 		Settings:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "settings")),
 		CompleteNext: key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "next completion")),
 		CompletePrev: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "prev completion")),

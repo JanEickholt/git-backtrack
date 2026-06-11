@@ -99,6 +99,29 @@ func parseDuration(adjustment string) (time.Duration, bool) {
 	return duration, true
 }
 
+func formatPositiveTimeAdjustment(duration time.Duration) string {
+	if duration <= 0 {
+		return ""
+	}
+	seconds := int64((duration + time.Second - 1) / time.Second)
+	units := []struct {
+		suffix  string
+		seconds int64
+	}{
+		{suffix: "w", seconds: int64((7 * 24 * time.Hour) / time.Second)},
+		{suffix: "d", seconds: int64((24 * time.Hour) / time.Second)},
+		{suffix: "h", seconds: int64(time.Hour / time.Second)},
+		{suffix: "m", seconds: int64(time.Minute / time.Second)},
+		{suffix: "s", seconds: 1},
+	}
+	for _, unit := range units {
+		if seconds%unit.seconds == 0 {
+			return fmt.Sprintf("+%d%s", seconds/unit.seconds, unit.suffix)
+		}
+	}
+	return fmt.Sprintf("+%ds", seconds)
+}
+
 func calculateTimeSpread(
 	commits []gitops.CommitInfo,
 	selectedHashes map[string]bool,
@@ -177,6 +200,13 @@ func parseDateTime(dateStr, timeStr string, loc *time.Location) (time.Time, erro
 	return time.Time{}, fmt.Errorf("cannot parse datetime: %s", datetimeStr)
 }
 
+func effectiveCommitDate(commit gitops.CommitInfo, editMap map[string]*gitops.ForgeChange) time.Time {
+	if change, ok := editMap[commit.Hash.String()]; ok && change.NewDate != nil {
+		return *change.NewDate
+	}
+	return commit.AuthorDate
+}
+
 func hasTimeAnomaly(commit gitops.CommitInfo, allCommits []gitops.CommitInfo, editMap map[string]*gitops.ForgeChange) bool {
 	hashToCommit := make(map[string]gitops.CommitInfo)
 	for _, c := range allCommits {
@@ -184,21 +214,78 @@ func hasTimeAnomaly(commit gitops.CommitInfo, allCommits []gitops.CommitInfo, ed
 	}
 
 	localLoc := time.Local
-	commitDate := commit.AuthorDate.In(localLoc)
-	if change, ok := editMap[commit.Hash.String()]; ok && change.NewDate != nil {
-		commitDate = change.NewDate.In(localLoc)
-	}
+	commitDate := effectiveCommitDate(commit, editMap).In(localLoc)
 
 	for _, parentHash := range commit.Parents {
 		if parent, ok := hashToCommit[parentHash.String()]; ok {
-			parentDate := parent.AuthorDate.In(localLoc)
-			if change, ok := editMap[parentHash.String()]; ok && change.NewDate != nil {
-				parentDate = change.NewDate.In(localLoc)
-			}
+			parentDate := effectiveCommitDate(parent, editMap).In(localLoc)
 			if commitDate.Before(parentDate) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func descendantSelection(commits []gitops.CommitInfo, rootHash string) map[string]bool {
+	childrenByParent := make(map[string][]string)
+	commitExists := make(map[string]bool, len(commits))
+	for _, commit := range commits {
+		hash := commit.Hash.String()
+		commitExists[hash] = true
+		for _, parent := range commit.Parents {
+			parentHash := parent.String()
+			childrenByParent[parentHash] = append(childrenByParent[parentHash], hash)
+		}
+	}
+
+	selected := make(map[string]bool)
+	if !commitExists[rootHash] {
+		return selected
+	}
+	stack := []string{rootHash}
+	for len(stack) > 0 {
+		hash := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if selected[hash] {
+			continue
+		}
+		selected[hash] = true
+		stack = append(stack, childrenByParent[hash]...)
+	}
+	return selected
+}
+
+func minimumTimingFixAdjustment(commits []gitops.CommitInfo, selected map[string]bool, editMap map[string]*gitops.ForgeChange) time.Duration {
+	hashToCommit := make(map[string]gitops.CommitInfo, len(commits))
+	for _, commit := range commits {
+		hashToCommit[commit.Hash.String()] = commit
+	}
+
+	var adjustment time.Duration
+	for _, commit := range commits {
+		hash := commit.Hash.String()
+		if !selected[hash] {
+			continue
+		}
+		commitDate := effectiveCommitDate(commit, editMap)
+		for _, parentHash := range commit.Parents {
+			parentHashStr := parentHash.String()
+			if selected[parentHashStr] {
+				continue
+			}
+			parent, ok := hashToCommit[parentHashStr]
+			if !ok {
+				continue
+			}
+			needed := effectiveCommitDate(parent, editMap).Add(time.Second).Sub(commitDate)
+			if needed > adjustment {
+				adjustment = needed
+			}
+		}
+	}
+	if adjustment <= 0 {
+		return 0
+	}
+	return ((adjustment + time.Second - 1) / time.Second) * time.Second
 }

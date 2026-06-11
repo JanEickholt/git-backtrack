@@ -26,6 +26,18 @@ func TestParseDuration(t *testing.T) {
 	}
 }
 
+func TestFormatPositiveTimeAdjustment(t *testing.T) {
+	if got := formatPositiveTimeAdjustment(2 * time.Second); got != "+2s" {
+		t.Fatalf("adjustment = %q, want +2s", got)
+	}
+	if got := formatPositiveTimeAdjustment(2 * time.Hour); got != "+2h" {
+		t.Fatalf("adjustment = %q, want +2h", got)
+	}
+	if got := formatPositiveTimeAdjustment(1500 * time.Millisecond); got != "+2s" {
+		t.Fatalf("adjustment = %q, want +2s", got)
+	}
+}
+
 func TestParseDateTimeAcceptsMinutePrecision(t *testing.T) {
 	got, err := parseDateTime("2024-01-02", "03:04", time.UTC)
 	if err != nil {
@@ -86,5 +98,52 @@ func TestCalculateTimeSpreadDistributesFromOldest(t *testing.T) {
 	}
 	if spread[commits[2].Hash.String()] != 0 {
 		t.Fatalf("oldest spread = %s, want 0", spread[commits[2].Hash.String()])
+	}
+}
+
+func TestDescendantSelectionIncludesRootAndChildren(t *testing.T) {
+	root := plumbing.NewHash("2222222222222222222222222222222222222222")
+	child := plumbing.NewHash("3333333333333333333333333333333333333333")
+	mergeChild := plumbing.NewHash("4444444444444444444444444444444444444444")
+	otherParent := plumbing.NewHash("5555555555555555555555555555555555555555")
+	parent := plumbing.NewHash("1111111111111111111111111111111111111111")
+	commits := []gitops.CommitInfo{
+		{Hash: mergeChild, Parents: []plumbing.Hash{child, otherParent}},
+		{Hash: child, Parents: []plumbing.Hash{root}},
+		{Hash: otherParent},
+		{Hash: root, Parents: []plumbing.Hash{parent}},
+		{Hash: parent},
+	}
+
+	selected := descendantSelection(commits, root.String())
+
+	for _, hash := range []plumbing.Hash{root, child, mergeChild} {
+		if !selected[hash.String()] {
+			t.Fatalf("selected[%s] = false, want true", hash.String()[:7])
+		}
+	}
+	for _, hash := range []plumbing.Hash{parent, otherParent} {
+		if selected[hash.String()] {
+			t.Fatalf("selected[%s] = true, want false", hash.String()[:7])
+		}
+	}
+}
+
+func TestMinimumTimingFixAdjustmentUsesUnselectedParentBoundary(t *testing.T) {
+	parentTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	parent := plumbing.NewHash("1111111111111111111111111111111111111111")
+	root := plumbing.NewHash("2222222222222222222222222222222222222222")
+	child := plumbing.NewHash("3333333333333333333333333333333333333333")
+	commits := []gitops.CommitInfo{
+		{Hash: child, AuthorDate: parentTime.Add(5 * time.Second), Parents: []plumbing.Hash{root}},
+		{Hash: root, AuthorDate: parentTime.Add(-1 * time.Second), Parents: []plumbing.Hash{parent}},
+		{Hash: parent, AuthorDate: parentTime},
+	}
+	selected := map[string]bool{root.String(): true, child.String(): true}
+
+	adjustment := minimumTimingFixAdjustment(commits, selected, nil)
+
+	if adjustment != 2*time.Second {
+		t.Fatalf("adjustment = %s, want 2s", adjustment)
 	}
 }

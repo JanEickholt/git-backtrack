@@ -137,6 +137,66 @@ func TestHandleListKeySettingsOpensSettings(t *testing.T) {
 	}
 }
 
+func TestHandleListKeySwitchBranchUsesUppercaseB(t *testing.T) {
+	m := Model{keys: defaultKeyMap()}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'B'}})
+	m = updated.(Model)
+	if m.state != ViewBranch {
+		t.Fatalf("state = %v, want ViewBranch", m.state)
+	}
+
+	m = Model{keys: defaultKeyMap(), list: list.New(nil, commitDelegate{}, 80, 20)}
+	updated, _ = m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	m = updated.(Model)
+	if m.state == ViewBranch {
+		t.Fatalf("lowercase c should not open branch switch")
+	}
+}
+
+func TestHandleListKeyTimingFixSelectsDescendantsAndPrefillsBatch(t *testing.T) {
+	parentTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	parent := plumbing.NewHash("1111111111111111111111111111111111111111")
+	root := plumbing.NewHash("2222222222222222222222222222222222222222")
+	child := plumbing.NewHash("3333333333333333333333333333333333333333")
+	commits := []gitops.CommitInfo{
+		{Hash: child, AuthorDate: parentTime.Add(5 * time.Second), Parents: []plumbing.Hash{root}},
+		{Hash: root, AuthorDate: parentTime.Add(-1 * time.Second), Parents: []plumbing.Hash{parent}},
+		{Hash: parent, AuthorDate: parentTime},
+	}
+	items := make([]list.Item, len(commits))
+	for i := range commits {
+		items[i] = commitItem{commit: commits[i]}
+	}
+	m := Model{
+		commits:         commits,
+		list:            list.New(items, commitDelegate{}, 80, 20),
+		keys:            defaultKeyMap(),
+		editMap:         make(map[string]*gitops.ForgeChange),
+		selectedCommits: make(map[string]bool),
+	}
+	m.list.Select(1)
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	m = updated.(Model)
+
+	if m.state != ViewBatchEdit {
+		t.Fatalf("state = %v, want ViewBatchEdit", m.state)
+	}
+	if m.batchFocus != 2 {
+		t.Fatalf("batchFocus = %d, want 2", m.batchFocus)
+	}
+	if got := m.batchFields[2].Value(); got != "+2s" {
+		t.Fatalf("time adjustment = %q, want +2s", got)
+	}
+	if !m.selectedCommits[root.String()] || !m.selectedCommits[child.String()] {
+		t.Fatalf("root and child should be selected: %#v", m.selectedCommits)
+	}
+	if m.selectedCommits[parent.String()] {
+		t.Fatalf("parent should not be selected")
+	}
+}
+
 func TestHandleSettingsKeyTogglesSettings(t *testing.T) {
 	m := Model{state: ViewSettings, keys: defaultKeyMap(), graph: &gitops.Graph{Rows: []gitops.GraphRow{{IsCommit: true}}}}
 

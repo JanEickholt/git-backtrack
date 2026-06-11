@@ -328,6 +328,29 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.state = ViewBatchEdit
 		return m, nil
 
+	case key.Matches(msg, m.keys.TimingFix):
+		if len(m.commits) == 0 {
+			return m, nil
+		}
+		idx := m.list.Index()
+		if idx < 0 || idx >= len(m.commits) || !hasTimeAnomaly(m.commits[idx], m.commits, m.editMap) {
+			return m, nil
+		}
+		selected := descendantSelection(m.commits, m.commits[idx].Hash.String())
+		adjustment := minimumTimingFixAdjustment(m.commits, selected, m.editMap)
+		adjustmentText := formatPositiveTimeAdjustment(adjustment)
+		if adjustmentText == "" {
+			return m, nil
+		}
+		m.selectedCommits = selected
+		m.initBatchFields()
+		m.batchFields[m.batchFocus].Blur()
+		m.batchFocus = 2
+		m.batchFields[m.batchFocus].SetValue(adjustmentText)
+		m.batchFields[m.batchFocus].Focus()
+		m.state = ViewBatchEdit
+		return m, nil
+
 	case key.Matches(msg, m.keys.Reset):
 		if len(m.commits) == 0 {
 			return m, nil
@@ -1504,11 +1527,14 @@ func (m Model) renderListFooter(selectedCount int) string {
 			footerAction{key: "b", label: "batch"},
 		)
 	}
+	if idx := m.list.Index(); idx >= 0 && idx < len(m.commits) && hasTimeAnomaly(m.commits[idx], m.commits, m.editMap) {
+		actions = append(actions, footerAction{key: "T", label: "fix time"})
+	}
 	if len(m.undoStack) > 0 {
 		actions = append(actions, footerAction{key: "u", label: "undo"})
 	}
 	actions = append(actions,
-		footerAction{key: "c", label: "switch"},
+		footerAction{key: "B", label: "switch"},
 		footerAction{key: "s", label: "settings"},
 		footerAction{key: "a", label: "apply"},
 		footerAction{key: "q", label: "quit"},
