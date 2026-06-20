@@ -210,8 +210,11 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	sepStyle := lipgloss.NewStyle()
 
 	if commit.IsUnpushed {
-		authorStyle = authorStyle.Foreground(lipgloss.Color("13"))
-		dateStyle = dateStyle.Foreground(lipgloss.Color("7"))
+		hashStyle = hashStyle.Bold(true)
+		authorStyle = authorStyle.Bold(true)
+		dateStyle = dateStyle.Bold(true)
+		addStyle = addStyle.Bold(true)
+		delStyle = delStyle.Bold(true)
 		msgStyle = msgStyle.Bold(true)
 	}
 
