@@ -1948,7 +1948,7 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 	nameColor := lipgloss.Color("12")
 
 	if original.IsUnpushed {
-		nameColor = lipgloss.Color("14")
+		nameColor = lipgloss.Color("13")
 	}
 
 	if change != nil {
