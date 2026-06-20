@@ -1947,6 +1947,10 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 	hashColor := lipgloss.Color("14")
 	nameColor := lipgloss.Color("12")
 
+	if original.IsUnpushed {
+		nameColor = lipgloss.Color("14")
+	}
+
 	if change != nil {
 		switch change.Operation {
 		case gitops.ForgeDrop:
@@ -1986,6 +1990,11 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
+
+	if original.IsUnpushed {
+		msgStyle = msgStyle.Bold(true)
+	}
+
 	if highlight {
 		hashStyle = hashStyle.Background(bg)
 		nameStyle = nameStyle.Background(bg)
@@ -2038,6 +2047,10 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	sepStyle := lipgloss.NewStyle()
+
+	if original.IsUnpushed {
+		textStyle = textStyle.Bold(true)
+	}
 
 	if highlight {
 		hashStyle = hashStyle.Background(bg)
@@ -2101,6 +2114,10 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
+
+	if original.IsUnpushed {
+		msgStyle = msgStyle.Bold(true)
+	}
 
 	if highlight {
 		hashStyle = hashStyle.Background(bg)
