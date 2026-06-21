@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -41,65 +43,11 @@ func (r *Repository) Reload() error {
 }
 
 func (r *Repository) ListAllCommits() ([]CommitInfo, error) {
-	r.Reload()
-
-	refs, err := r.repo.References()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get references: %w", err)
-	}
-
-	seen := make(map[plumbing.Hash]bool)
-	var commits []CommitInfo
-
-	if err := refs.ForEach(func(ref *plumbing.Reference) error {
-		if ref.Type() != plumbing.HashReference {
-			return nil
-		}
-
-		refName := ref.Name().String()
-		if strings.HasPrefix(refName, "refs/backtrack-backup/") {
-			return nil
-		}
-
-		hash := ref.Hash()
-		if seen[hash] {
-			return nil
-		}
-
-		return commitHistory(r.repo, hash, &commits, seen)
-	}); err != nil {
-		return nil, err
-	}
-
-	// Sort commits by date, newest first
-	sort.Slice(commits, func(i, j int) bool {
-		return commits[i].AuthorDate.After(commits[j].AuthorDate)
-	})
-
-	return commits, nil
+	return r.listCommitInfoFromGit("--exclude=refs/backtrack-backup/*", "--all")
 }
 
 func (r *Repository) ListCommitsFromRef(refName string) ([]CommitInfo, error) {
-	r.Reload()
-
-	ref, err := r.repo.Reference(plumbing.ReferenceName(refName), true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get reference %s: %w", refName, err)
-	}
-
-	seen := make(map[plumbing.Hash]bool)
-	var commits []CommitInfo
-
-	if err := commitHistory(r.repo, ref.Hash(), &commits, seen); err != nil {
-		return nil, err
-	}
-
-	// Sort commits by date, newest first
-	sort.Slice(commits, func(i, j int) bool {
-		return commits[i].AuthorDate.After(commits[j].AuthorDate)
-	})
-
-	return commits, nil
+	return r.listCommitInfoFromGit(refName)
 }
 
 func (r *Repository) ListAllCommitsWithGraph() ([]CommitInfo, *Graph, error) {
@@ -133,6 +81,15 @@ func (r *Repository) listCommitsWithGraph(order GraphOrder, refArgs ...string) (
 	}
 
 	graph := ParseGraphRows(output)
+	commitInfos, err := r.listCommitInfoFromGit(refArgs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	infoByHash := make(map[plumbing.Hash]CommitInfo, len(commitInfos))
+	for _, commit := range commitInfos {
+		infoByHash[commit.Hash] = commit
+	}
+
 	commits := make([]CommitInfo, 0, len(graph.CommitRows))
 	seen := make(map[plumbing.Hash]bool)
 	for _, rowIndex := range graph.CommitRows {
@@ -142,15 +99,117 @@ func (r *Repository) listCommitsWithGraph(order GraphOrder, refArgs ...string) (
 		}
 		seen[row.CommitHash] = true
 
-		commit, err := r.repo.CommitObject(row.CommitHash)
-		if err != nil {
+		commit, ok := infoByHash[row.CommitHash]
+		if !ok {
 			continue
 		}
-		commits = append(commits, commitInfo(commit))
+		commits = append(commits, commit)
 	}
 	graph.AttachCommitIndexes(commits)
 
 	return commits, graph, nil
+}
+
+func (r *Repository) listCommitInfoFromGit(refArgs ...string) ([]CommitInfo, error) {
+	if err := r.Reload(); err != nil {
+		return nil, err
+	}
+
+	args := []string{
+		"log",
+		"--no-color",
+		"--numstat",
+		"--format=" + commitRecordMarker + "%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%B%x1f",
+	}
+	args = append(args, refArgs...)
+	output, err := r.gitOutput(args...)
+	if err != nil {
+		return nil, err
+	}
+
+	commits := parseCommitInfoLog(output)
+	sort.Slice(commits, func(i, j int) bool {
+		return commits[i].AuthorDate.After(commits[j].AuthorDate)
+	})
+	return commits, nil
+}
+
+const commitRecordMarker = "\x1e"
+
+func parseCommitInfoLog(output string) []CommitInfo {
+	records := strings.Split(output, commitRecordMarker)
+	commits := make([]CommitInfo, 0, len(records))
+	seen := make(map[plumbing.Hash]bool)
+
+	for _, record := range records {
+		record = strings.TrimLeft(record, "\n")
+		if strings.TrimSpace(record) == "" {
+			continue
+		}
+
+		fields := strings.SplitN(record, "\x1f", 7)
+		if len(fields) != 7 {
+			continue
+		}
+
+		hash := plumbing.NewHash(fields[0])
+		if hash.IsZero() || seen[hash] {
+			continue
+		}
+		seen[hash] = true
+
+		date, err := time.Parse(time.RFC3339, fields[3])
+		if err != nil {
+			date = time.Time{}
+		}
+
+		message := strings.TrimRight(fields[5], "\n")
+		additions, deletions := parseNumstatTotals(fields[6])
+
+		commits = append(commits, CommitInfo{
+			Hash:        hash,
+			ShortHash:   hash.String()[:7],
+			AuthorName:  fields[1],
+			AuthorEmail: fields[2],
+			AuthorDate:  date,
+			Message:     message,
+			Parents:     parseParentHashes(fields[4]),
+			Additions:   additions,
+			Deletions:   deletions,
+		})
+	}
+
+	return commits
+}
+
+func parseParentHashes(value string) []plumbing.Hash {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parts := strings.Fields(value)
+	parents := make([]plumbing.Hash, 0, len(parts))
+	for _, part := range parts {
+		parents = append(parents, plumbing.NewHash(part))
+	}
+	return parents
+}
+
+func parseNumstatTotals(value string) (int, int) {
+	additions := 0
+	deletions := 0
+	for _, line := range strings.Split(value, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if add, err := strconv.Atoi(fields[0]); err == nil {
+			additions += add
+		}
+		if del, err := strconv.Atoi(fields[1]); err == nil {
+			deletions += del
+		}
+	}
+	return additions, deletions
 }
 
 func (r *Repository) gitOutput(args ...string) (string, error) {
