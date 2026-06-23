@@ -1,11 +1,14 @@
 package gitops
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -110,8 +113,302 @@ func (r *Repository) GetSigningConfig() (*SigningConfig, error) {
 	return cfg, nil
 }
 
+func normalizeMail(email string) string {
+	return strings.ToLower(strings.TrimSpace(email))
+}
+
+func mailAuthSection(email string) string {
+	return "git-backtrack-mail-" + hex.EncodeToString([]byte(normalizeMail(email)))
+}
+
+func mailAuthKey(email, key string) string {
+	return mailAuthSection(email) + "." + key
+}
+
+func ReadGPGPrivateKey(path string) (string, string, string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", "", "", fmt.Errorf("gpg private key path is required")
+	}
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return "", "", "", err
+	}
+	cmd := exec.Command("gpg", "--import-options", "show-only", "--with-colons", "--import", path)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", "", "", fmt.Errorf("gpg inspect failed: %s: %w", strings.TrimSpace(string(output)), err)
+	}
+	fingerprint := parseGPGFingerprint(string(output))
+	if fingerprint == "" {
+		return "", "", "", fmt.Errorf("gpg private key fingerprint not found")
+	}
+	keyID := fingerprint
+	if len(fingerprint) > 16 {
+		keyID = fingerprint[len(fingerprint)-16:]
+	}
+	return string(key), fingerprint, keyID, nil
+}
+
+func parseGPGFingerprint(output string) string {
+	wantSecretFingerprint := false
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) == 0 {
+			continue
+		}
+		if fields[0] == "sec" {
+			wantSecretFingerprint = true
+			continue
+		}
+		if wantSecretFingerprint && len(fields) > 9 && fields[0] == "fpr" && strings.TrimSpace(fields[9]) != "" {
+			return strings.TrimSpace(fields[9])
+		}
+	}
+	return ""
+}
+
+func (r *Repository) configGet(scope, key string) (string, bool, error) {
+	args := []string{}
+	if scope != "" {
+		args = append(args, scope)
+	}
+	args = append(args, "--get", key)
+	cmd := exec.Command("git", append([]string{"-C", r.path, "config"}, args...)...)
+	cmd.Env = os.Environ()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+			return "", false, nil
+		}
+		text := strings.TrimSpace(string(output))
+		if text == "" {
+			return "", false, err
+		}
+		return "", false, fmt.Errorf("git config --get %s: %s: %w", key, text, err)
+	}
+	return strings.TrimRight(string(output), "\r\n"), true, nil
+}
+
+func (r *Repository) configSet(global bool, key, value string) error {
+	scope := "--local"
+	if global {
+		scope = "--global"
+	}
+	cmd := exec.Command("git", "-C", r.path, "config", scope, key, value)
+	cmd.Env = os.Environ()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		text := strings.TrimSpace(string(output))
+		if text == "" {
+			return err
+		}
+		return fmt.Errorf("git config %s %s: %s: %w", scope, key, text, err)
+	}
+	return nil
+}
+
+func (r *Repository) configUnset(global bool, key string) error {
+	scope := "--local"
+	if global {
+		scope = "--global"
+	}
+	cmd := exec.Command("git", "-C", r.path, "config", scope, "--unset", key)
+	cmd.Env = os.Environ()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 5 {
+			return nil
+		}
+		text := strings.TrimSpace(string(output))
+		if text == "" {
+			return err
+		}
+		return fmt.Errorf("git config %s --unset %s: %s: %w", scope, key, text, err)
+	}
+	return nil
+}
+
+func (r *Repository) configSetOrUnset(global bool, key, value string) error {
+	if value == "" {
+		return r.configUnset(global, key)
+	}
+	return r.configSet(global, key, value)
+}
+
+func (r *Repository) SetMailAuthConfig(cfg MailAuthConfig, global bool) error {
+	cfg.Email = normalizeMail(cfg.Email)
+	if cfg.Email == "" {
+		return fmt.Errorf("email is required")
+	}
+	if err := r.configSet(global, mailAuthKey(cfg.Email, "email"), cfg.Email); err != nil {
+		return err
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "github-token"), cfg.GitHubToken); err != nil {
+		return err
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "gitlab-token"), cfg.GitLabToken); err != nil {
+		return err
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "gpg-private-key"), base64.StdEncoding.EncodeToString([]byte(cfg.GPGPrivateKey))); err != nil {
+		return err
+	}
+	if cfg.GPGPrivateKey == "" {
+		if err := r.configUnset(global, mailAuthKey(cfg.Email, "gpg-private-key")); err != nil {
+			return err
+		}
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "gpg-fingerprint"), cfg.GPGFingerprint); err != nil {
+		return err
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "gpg-key-id"), cfg.GPGKeyID); err != nil {
+		return err
+	}
+	if cfg.GPGPrivateKey != "" || cfg.GPGKey == "" {
+		if err := r.configUnset(global, mailAuthKey(cfg.Email, "gpg-key")); err != nil {
+			return err
+		}
+		if err := r.configUnset(global, mailAuthKey(cfg.Email, "pgp-key")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) GetMailAuthConfig(email string) (*MailAuthConfig, error) {
+	return r.getMailAuthConfig(email, []string{"--local", "--global"})
+}
+
+func (r *Repository) GetGlobalMailAuthConfig(email string) (*MailAuthConfig, error) {
+	return r.getMailAuthConfig(email, []string{"--global"})
+}
+
+func (r *Repository) GetLocalMailAuthConfig(email string) (*MailAuthConfig, error) {
+	return r.getMailAuthConfig(email, []string{"--local"})
+}
+
+func (r *Repository) getMailAuthConfig(email string, scopes []string) (*MailAuthConfig, error) {
+	email = normalizeMail(email)
+	if email == "" {
+		return nil, fmt.Errorf("email is required")
+	}
+	cfg := &MailAuthConfig{Email: email}
+	for _, item := range []struct {
+		key string
+		set func(string)
+	}{
+		{"github-token", func(v string) { cfg.GitHubToken = v }},
+		{"gitlab-token", func(v string) { cfg.GitLabToken = v }},
+		{"gpg-private-key", func(v string) {
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err == nil {
+				cfg.GPGPrivateKey = string(decoded)
+			}
+		}},
+		{"gpg-fingerprint", func(v string) { cfg.GPGFingerprint = v }},
+		{"gpg-key-id", func(v string) { cfg.GPGKeyID = v }},
+		{"gpg-key", func(v string) { cfg.GPGKey = v }},
+		{"pgp-key", func(v string) {
+			if cfg.GPGKey == "" {
+				cfg.GPGKey = v
+			}
+		}},
+	} {
+		for _, scope := range scopes {
+			value, ok, err := r.configGet(scope, mailAuthKey(email, item.key))
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				item.set(value)
+				break
+			}
+		}
+	}
+	return cfg, nil
+}
+
+func (r *Repository) ListMailAuthConfigs() ([]MailAuthConfig, error) {
+	emails := map[string]bool{}
+	for _, scope := range []string{"--global", "--local"} {
+		cmd := exec.Command("git", "-C", r.path, "config", scope, "--get-regexp", `^git-backtrack-mail-[0-9a-f]+\.email$`)
+		cmd.Env = os.Environ()
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+				continue
+			}
+			text := strings.TrimSpace(string(output))
+			if text == "" {
+				return nil, err
+			}
+			return nil, fmt.Errorf("git config --get-regexp mail auth: %s: %w", text, err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				emails[normalizeMail(fields[1])] = true
+			}
+		}
+	}
+
+	keys := make([]string, 0, len(emails))
+	for email := range emails {
+		keys = append(keys, email)
+	}
+	sort.Strings(keys)
+
+	configs := make([]MailAuthConfig, 0, len(keys))
+	for _, email := range keys {
+		cfg, err := r.GetMailAuthConfig(email)
+		if err != nil {
+			return nil, err
+		}
+		configs = append(configs, *cfg)
+	}
+	return configs, nil
+}
+
+func (r *Repository) GetSigningConfigForEmail(email string) (*SigningConfig, error) {
+	cfg, err := r.GetSigningConfig()
+	if err != nil {
+		return nil, err
+	}
+	mailCfg, err := r.GetMailAuthConfig(email)
+	if err != nil {
+		return nil, err
+	}
+	if mailCfg.GPGPrivateKey != "" {
+		cfg.PrivateKey = mailCfg.GPGPrivateKey
+		cfg.SigningKey = mailCfg.GPGFingerprint
+		if cfg.SigningKey == "" {
+			cfg.SigningKey = mailCfg.GPGKeyID
+		}
+		cfg.KeyType = "gpg"
+	} else if mailCfg.GPGKey != "" {
+		cfg.SigningKey = mailCfg.GPGKey
+		cfg.KeyType = "gpg"
+	}
+	return cfg, nil
+}
+
 func (r *Repository) SignCommit(commitHash plumbing.Hash) (plumbing.Hash, error) {
 	signingConfig, err := r.GetSigningConfig()
+	if err != nil || !signingConfig.SignCommits {
+		return commitHash, nil
+	}
+
+	switch signingConfig.KeyType {
+	case "ssh":
+		return r.signCommitSSH(commitHash, signingConfig)
+	case "gpg", "":
+		return r.signCommitGPG(commitHash, signingConfig)
+	default:
+		return commitHash, fmt.Errorf("unsupported signing key type: %s", signingConfig.KeyType)
+	}
+}
+
+func (r *Repository) SignCommitForEmail(commitHash plumbing.Hash, email string) (plumbing.Hash, error) {
+	signingConfig, err := r.GetSigningConfigForEmail(email)
 	if err != nil || !signingConfig.SignCommits {
 		return commitHash, nil
 	}
@@ -148,8 +445,26 @@ func (r *Repository) signCommitGPG(commitHash plumbing.Hash, signingConfig *Sign
 		return commitHash, err
 	}
 
-	cmd := exec.Command("gpg", "--status-fd=2", "-bsau", signingConfig.SigningKey)
-	cmd.Env = os.Environ()
+	env := os.Environ()
+	if signingConfig.PrivateKey != "" {
+		gnupgHome, err := os.MkdirTemp("", "git-backtrack-gnupg-*")
+		if err != nil {
+			return commitHash, err
+		}
+		defer os.RemoveAll(gnupgHome)
+		if err := os.Chmod(gnupgHome, 0700); err != nil {
+			return commitHash, err
+		}
+		importCmd := exec.Command("gpg", "--batch", "--import")
+		importCmd.Env = append(env, "GNUPGHOME="+gnupgHome)
+		importCmd.Stdin = strings.NewReader(signingConfig.PrivateKey)
+		if out, err := importCmd.CombinedOutput(); err != nil {
+			return commitHash, fmt.Errorf("gpg import failed: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		env = append(env, "GNUPGHOME="+gnupgHome)
+	}
+	cmd := exec.Command("gpg", "--batch", "--yes", "--status-fd=2", "-bsau", signingConfig.SigningKey)
+	cmd.Env = env
 	cmd.Stdin = strings.NewReader(string(payload))
 	sig, err := cmd.Output()
 	if err != nil {

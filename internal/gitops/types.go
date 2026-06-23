@@ -21,7 +21,18 @@ type CommitInfo struct {
 type SigningConfig struct {
 	SignCommits bool
 	SigningKey  string
+	PrivateKey  string
 	KeyType     string
+}
+
+type MailAuthConfig struct {
+	Email          string
+	GitHubToken    string
+	GitLabToken    string
+	GPGKey         string
+	GPGPrivateKey  string
+	GPGFingerprint string
+	GPGKeyID       string
 }
 
 type UserIdentity struct {

@@ -31,6 +31,21 @@ Graph order can be `topo`, `date`, `author-date`, or `first-parent`.
 
 Inside the TUI, press `s` to toggle display settings at runtime.
 
+## Per-email auth and signing
+
+Store GitHub/GitLab tokens and a GPG private signing key per author email in Git config:
+
+```sh
+git-backtrack auth set --email alice@example.com --github-token ghp_xxx --gitlab-token glpat_xxx --gpg-private-key ~/.gnupg/alice.asc
+git-backtrack auth set --email work@example.com --gpg-private-key ~/work.asc --local
+git-backtrack auth list
+git-backtrack auth get --email alice@example.com --show-tokens
+```
+
+Global Git config is used by default (`--global` is accepted for compatibility). Add `--local` to store entries only in the current repository. The TUI Settings screen also includes an Auth keys submenu for editing GitHub token, GitLab token, and importing a GPG private key per email. The key material is stored encoded, not encrypted, in Git config; auth output shows only the derived fingerprint/status. During rewrites, a configured per-email GPG private key overrides the default `user.signingkey` when signing commits for that email.
+
+After applying rewrites in the TUI, the result screen lists configured accounts with GitHub or GitLab tokens so you can push the rewritten branch directly instead of pushing manually.
+
 ## JSON Tool Mode
 
 Agents and scripts can use the JSON command interface instead of driving the TUI:

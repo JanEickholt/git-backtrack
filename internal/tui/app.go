@@ -27,6 +27,8 @@ const (
 	ViewResult
 	ViewBranch
 	ViewSettings
+	ViewAuthSettings
+	ViewBackupRestore
 )
 
 type SettingItem int
@@ -37,6 +39,7 @@ const (
 	SettingTimezone
 	SettingEmail
 	SettingLineDiffs
+	SettingAuthKeys
 	settingCount
 )
 
@@ -72,6 +75,11 @@ type Model struct {
 	batchFocus  int
 	completeIdx int
 
+	authFields []textinput.Model
+	authFocus  int
+	authEmails []string
+	authEmail  int
+
 	result  *gitops.RewriteResult
 	err     error
 	list    list.Model
@@ -80,6 +88,13 @@ type Model struct {
 	height  int
 	keys    keyMap
 	options Options
+
+	pushAccounts []gitops.PushAccount
+	pushIndex    int
+	pushStatus   string
+	revertStatus string
+	backups      []string
+	backupIndex  int
 
 	currentBranch string
 	branchList    list.Model
@@ -224,6 +239,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleBranchKey(msg)
 		case ViewSettings:
 			return m.handleSettingsKey(msg)
+		case ViewAuthSettings:
+			return m.handleAuthSettingsKey(msg)
+		case ViewBackupRestore:
+			return m.handleBackupRestoreKey(msg)
 		}
 	}
 
@@ -378,6 +397,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.Settings):
 		m.state = ViewSettings
 		return m, nil
+
+	case msg.String() == "R":
+		return m.openBackupRestore()
 	}
 
 	var cmd tea.Cmd
@@ -776,6 +798,11 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Confirm), key.Matches(msg, m.keys.Select):
+		if SettingItem(m.settingsIndex) == SettingAuthKeys {
+			m.initAuthFields()
+			m.state = ViewAuthSettings
+			return m, nil
+		}
 		m.toggleSetting(SettingItem(m.settingsIndex))
 		m.updateListScrollOffset(m.visibleListRows())
 		return m, nil
@@ -796,6 +823,165 @@ func (m *Model) toggleSetting(item SettingItem) {
 	case SettingLineDiffs:
 		m.options.HideLineDiffs = !m.options.HideLineDiffs
 	}
+}
+
+func (m *Model) initAuthFields() {
+	m.authFields = make([]textinput.Model, 4)
+	email := m.defaultAuthEmail()
+	m.authEmails = m.authEmailCandidates(email)
+	if !containsString(m.authEmails, strings.ToLower(strings.TrimSpace(email))) && len(m.authEmails) > 0 {
+		email = m.authEmails[0]
+	}
+	m.authEmail = indexOfString(m.authEmails, strings.ToLower(strings.TrimSpace(email)))
+	cfg := &gitops.MailAuthConfig{Email: email}
+	if email != "" {
+		if existing, err := m.repo.GetGlobalMailAuthConfig(email); err == nil {
+			cfg = existing
+		}
+	}
+	placeholders := []string{"email@example.com", "GitHub token", "GitLab token", "GPG private key path"}
+	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, ""}
+	for i := range m.authFields {
+		m.authFields[i] = textinput.New()
+		m.authFields[i].Placeholder = placeholders[i]
+		m.authFields[i].SetValue(values[i])
+		m.authFields[i].Width = 60
+	}
+	m.authFields[0].Focus()
+	m.authFocus = 0
+}
+
+func (m *Model) loadAuthEmail(email string) {
+	email = strings.TrimSpace(email)
+	if len(m.authFields) < 4 {
+		return
+	}
+	cfg := &gitops.MailAuthConfig{Email: email}
+	if email != "" {
+		if existing, err := m.repo.GetGlobalMailAuthConfig(email); err == nil {
+			cfg = existing
+		}
+	}
+	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, ""}
+	for i, value := range values {
+		m.authFields[i].SetValue(value)
+	}
+}
+
+func (m Model) authEmailCandidates(current string) []string {
+	emails := make([]string, 0)
+	add := func(email string) {
+		email = strings.ToLower(strings.TrimSpace(email))
+		if email == "" || containsString(emails, email) {
+			return
+		}
+		emails = append(emails, email)
+	}
+	for _, commit := range m.commits {
+		add(commit.AuthorEmail)
+	}
+	emails = append(emails, "")
+	return emails
+}
+
+func containsString(values []string, value string) bool {
+	return indexOfString(values, value) >= 0
+}
+
+func indexOfString(values []string, value string) int {
+	for i, item := range values {
+		if item == value {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m Model) defaultAuthEmail() string {
+	if len(m.commits) > 0 {
+		idx := m.list.Index()
+		if idx >= 0 && idx < len(m.commits) && strings.TrimSpace(m.commits[idx].AuthorEmail) != "" {
+			return strings.TrimSpace(m.commits[idx].AuthorEmail)
+		}
+	}
+	if id, err := m.repo.GetUserIdentity(); err == nil && id != nil {
+		return strings.TrimSpace(id.Email)
+	}
+	return ""
+}
+
+func (m Model) handleAuthSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	save := func() {
+		if len(m.authFields) >= 4 {
+			email := m.authFields[0].Value()
+			if strings.TrimSpace(email) == "" {
+				return
+			}
+			cfg := gitops.MailAuthConfig{Email: email}
+			if existing, err := m.repo.GetGlobalMailAuthConfig(email); err == nil {
+				cfg = *existing
+			}
+			cfg.Email = email
+			cfg.GitHubToken = m.authFields[1].Value()
+			cfg.GitLabToken = m.authFields[2].Value()
+			if path := strings.TrimSpace(m.authFields[3].Value()); path != "" {
+				privateKey, fingerprint, keyID, err := gitops.ReadGPGPrivateKey(path)
+				if err != nil {
+					m.err = err
+					return
+				}
+				cfg.GPGPrivateKey = privateKey
+				cfg.GPGFingerprint = fingerprint
+				cfg.GPGKeyID = keyID
+				cfg.GPGKey = ""
+			}
+			err := m.repo.SetMailAuthConfig(cfg, true)
+			if err != nil {
+				m.err = err
+			}
+		}
+	}
+	saveAndReturn := func() (tea.Model, tea.Cmd) {
+		save()
+		m.state = ViewSettings
+		return m, nil
+	}
+	switchEmail := func(direction int) (tea.Model, tea.Cmd) {
+		save()
+		m.authEmails = m.authEmailCandidates(m.authFields[0].Value())
+		if len(m.authEmails) == 0 {
+			return m, nil
+		}
+		current := strings.ToLower(strings.TrimSpace(m.authFields[0].Value()))
+		idx := indexOfString(m.authEmails, current)
+		if idx < 0 {
+			idx = m.authEmail
+		}
+		m.authEmail = (idx + direction + len(m.authEmails)) % len(m.authEmails)
+		m.loadAuthEmail(m.authEmails[m.authEmail])
+		return m, nil
+	}
+	switch {
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Quit), key.Matches(msg, m.keys.Confirm):
+		return saveAndReturn()
+	case key.Matches(msg, m.keys.Tab), key.Matches(msg, m.keys.CompleteNext):
+		return switchEmail(1)
+	case key.Matches(msg, m.keys.ShiftTab), key.Matches(msg, m.keys.CompletePrev):
+		return switchEmail(-1)
+	case key.Matches(msg, m.keys.Down):
+		m.authFields[m.authFocus].Blur()
+		m.authFocus = (m.authFocus + 1) % len(m.authFields)
+		m.authFields[m.authFocus].Focus()
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		m.authFields[m.authFocus].Blur()
+		m.authFocus = (m.authFocus + len(m.authFields) - 1) % len(m.authFields)
+		m.authFields[m.authFocus].Focus()
+		return m, nil
+	}
+	m.authFields[m.authFocus], cmd = m.authFields[m.authFocus].Update(msg)
+	return m, cmd
 }
 
 func normalizedGraphOrder(order gitops.GraphOrder) gitops.GraphOrder {
@@ -1183,6 +1369,10 @@ func (m Model) handleConfirmKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.result = result
 				m.result.BackupRef = backupRef
+				m.pushAccounts, _ = m.repo.ListPushAccounts()
+				m.pushIndex = 0
+				m.pushStatus = ""
+				m.revertStatus = ""
 				m.refresh()
 			}
 			m.state = ViewResult
@@ -1194,8 +1384,83 @@ func (m Model) handleConfirmKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, m.keys.Quit), key.Matches(msg, m.keys.Confirm):
+	case key.Matches(msg, m.keys.Quit):
 		return m, tea.Quit
+	case m.err == nil && len(m.pushAccounts) > 0 && key.Matches(msg, m.keys.Up):
+		m.pushIndex = (m.pushIndex + len(m.pushAccounts) - 1) % len(m.pushAccounts)
+		m.pushStatus = ""
+		return m, nil
+	case m.err == nil && len(m.pushAccounts) > 0 && key.Matches(msg, m.keys.Down):
+		m.pushIndex = (m.pushIndex + 1) % len(m.pushAccounts)
+		m.pushStatus = ""
+		return m, nil
+	case m.err == nil && len(m.pushAccounts) > 0 && key.Matches(msg, m.keys.Confirm):
+		account := m.pushAccounts[m.pushIndex]
+		if err := m.repo.PushWithAccount(account); err != nil {
+			m.pushStatus = fmt.Sprintf("Push failed: %v", err)
+		} else {
+			m.pushStatus = fmt.Sprintf("Pushed with %s %s", account.Email, account.Forge)
+		}
+		return m, nil
+	case m.err == nil && len(m.pushAccounts) > 0 && msg.String() == "F":
+		account := m.pushAccounts[m.pushIndex]
+		if err := m.repo.ForcePushWithAccount(account); err != nil {
+			m.pushStatus = fmt.Sprintf("Force push failed: %v", err)
+		} else {
+			m.pushStatus = fmt.Sprintf("Force pushed with %s %s", account.Email, account.Forge)
+		}
+		return m, nil
+	case m.err == nil && msg.String() == "R":
+		return m.openBackupRestore()
+	case key.Matches(msg, m.keys.Confirm):
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m Model) openBackupRestore() (tea.Model, tea.Cmd) {
+	rewriter := gitops.NewHistoryRewriter(m.repo)
+	backups, err := rewriter.ListBackups()
+	if err != nil {
+		m.revertStatus = fmt.Sprintf("Failed to list backups: %v", err)
+		return m, nil
+	}
+	if len(backups) == 0 {
+		m.revertStatus = "No backups found"
+		return m, nil
+	}
+	m.backups = backups
+	m.backupIndex = len(backups) - 1
+	m.state = ViewBackupRestore
+	return m, nil
+}
+
+func (m Model) handleBackupRestoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Cancel), key.Matches(msg, m.keys.Quit):
+		m.state = ViewList
+		return m, nil
+	case key.Matches(msg, m.keys.Up):
+		m.backupIndex = (m.backupIndex + len(m.backups) - 1) % len(m.backups)
+		return m, nil
+	case key.Matches(msg, m.keys.Down):
+		m.backupIndex = (m.backupIndex + 1) % len(m.backups)
+		return m, nil
+	case key.Matches(msg, m.keys.Confirm):
+		if len(m.backups) == 0 {
+			m.state = ViewList
+			return m, nil
+		}
+		backup := m.backups[m.backupIndex]
+		rewriter := gitops.NewHistoryRewriter(m.repo)
+		if err := rewriter.RestoreFromBackup(backup); err != nil {
+			m.revertStatus = fmt.Sprintf("Restore failed: %v", err)
+		} else {
+			m.revertStatus = "Restored " + backup
+			m.refresh()
+		}
+		m.state = ViewList
+		return m, nil
 	}
 	return m, nil
 }
@@ -1258,6 +1523,10 @@ func (m Model) View() string {
 		return m.renderBranchView()
 	case ViewSettings:
 		return m.renderSettingsView()
+	case ViewAuthSettings:
+		return m.renderAuthSettingsView()
+	case ViewBackupRestore:
+		return m.renderBackupRestoreView()
 	default:
 		return ""
 	}
@@ -1296,6 +1565,10 @@ func (m Model) renderListView() string {
 
 	b.WriteString(titleStyle.Render(strings.Join(headerParts, " | ")))
 	b.WriteString("\n")
+	if m.revertStatus != "" {
+		b.WriteString(statusStyle.Render(m.revertStatus))
+		b.WriteString("\n")
+	}
 	maxRows := m.height - 2
 	if maxRows <= 0 {
 		maxRows = 20
@@ -1536,6 +1809,7 @@ func (m Model) renderListFooter(selectedCount int) string {
 	actions = append(actions,
 		footerAction{key: "B", label: "switch"},
 		footerAction{key: "s", label: "settings"},
+		footerAction{key: "R", label: "restore"},
 		footerAction{key: "a", label: "apply"},
 		footerAction{key: "q", label: "quit"},
 	)
@@ -1793,10 +2067,70 @@ func (m Model) renderResultView() string {
 			b.WriteString(fmt.Sprintf("Backup: %s\n", m.result.BackupRef))
 		}
 	}
+	if len(m.pushAccounts) > 0 {
+		b.WriteString("\nPush using:\n")
+		for i, account := range m.pushAccounts {
+			prefix := "  "
+			if i == m.pushIndex {
+				prefix = "> "
+			}
+			b.WriteString(fmt.Sprintf("%s%s (%s token)\n", prefix, account.Email, account.Forge))
+		}
+		if m.pushStatus != "" {
+			b.WriteString("\n")
+			b.WriteString(statusStyle.Render(m.pushStatus))
+			b.WriteString("\n")
+		}
+	}
+	if m.revertStatus != "" {
+		b.WriteString("\n")
+		b.WriteString(statusStyle.Render(m.revertStatus))
+		b.WriteString("\n")
+	}
 
 	b.WriteString("\n")
-	b.WriteString(statusStyle.Render("Press any key to exit"))
+	if len(m.pushAccounts) > 0 {
+		b.WriteString(renderFooter([]footerAction{
+			{key: "↑/↓", label: "account"},
+			{key: "enter", label: "push lease"},
+			{key: "F", label: "force push"},
+			{key: "R", label: "revert"},
+			{key: "q", label: "exit"},
+		}, m.width))
+	} else {
+		b.WriteString(renderFooter([]footerAction{
+			{key: "R", label: "revert"},
+			{key: "enter/q", label: "exit"},
+		}, m.width))
+	}
 
+	return b.String()
+}
+
+func (m Model) renderBackupRestoreView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Restore Backup"))
+	b.WriteString("\n\n")
+	if len(m.backups) == 0 {
+		b.WriteString(statusStyle.Render("No backups found"))
+		b.WriteString("\n\n")
+	} else {
+		for i, backup := range m.backups {
+			prefix := "  "
+			if i == m.backupIndex {
+				prefix = "> "
+			}
+			b.WriteString(prefix)
+			b.WriteString(backup)
+			b.WriteString("\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(renderFooter([]footerAction{
+		{key: "↑/↓", label: "backup"},
+		{key: "enter", label: "restore"},
+		{key: "esc/q", label: "cancel"},
+	}, m.width))
 	return b.String()
 }
 
@@ -1827,6 +2161,7 @@ func (m Model) renderSettingsView() string {
 		{label: "Timezone offsets", value: settingEnabledLabel(m.options.ShowTimezone)},
 		{label: "Author emails", value: settingEnabledLabel(m.options.ShowEmail)},
 		{label: "Line diffs", value: settingEnabledLabel(m.options.showsLineDiffs())},
+		{label: "Auth keys", value: m.authKeysSummary()},
 	}
 
 	for i, row := range rows {
@@ -1849,6 +2184,62 @@ func (m Model) renderSettingsView() string {
 	b.WriteString(renderFooter([]footerAction{
 		{key: "enter/space", label: "toggle"},
 		{key: "s/esc/q", label: "close"},
+	}, m.width))
+	return b.String()
+}
+
+func (m Model) authKeysSummary() string {
+	email := m.defaultAuthEmail()
+	if email == "" {
+		return "global credentials"
+	}
+	cfg, err := m.repo.GetMailAuthConfig(email)
+	if err != nil {
+		return email
+	}
+	parts := []string{email}
+	if cfg.GitHubToken != "" {
+		parts = append(parts, "GitHub "+maskedSecret(cfg.GitHubToken))
+	}
+	if cfg.GitLabToken != "" {
+		parts = append(parts, "GitLab "+maskedSecret(cfg.GitLabToken))
+	}
+	if cfg.GPGFingerprint != "" {
+		parts = append(parts, "GPG "+cfg.GPGFingerprint)
+	} else if cfg.GPGKey != "" {
+		parts = append(parts, "GPG "+cfg.GPGKey)
+	}
+	return strings.Join(parts, ", ")
+}
+
+func maskedSecret(value string) string {
+	if value == "" {
+		return "unset"
+	}
+	if len(value) <= 4 {
+		return "****"
+	}
+	return "****" + value[len(value)-4:]
+}
+
+func (m Model) renderAuthSettingsView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("Auth Keys"))
+	b.WriteString("\n\n")
+	labels := []string{"Email", "GitHub token", "GitLab token", "GPG private key path"}
+	for i, field := range m.authFields {
+		b.WriteString(labelStyle.Render(labels[i]))
+		b.WriteString("\n")
+		b.WriteString(field.View())
+		b.WriteString("\n\n")
+	}
+	b.WriteString(statusStyle.Render("Saved to global git config for this email. Stored GPG key material is not shown."))
+	b.WriteString("\n\n")
+	b.WriteString(renderFooter([]footerAction{
+		{key: "↑/↓", label: "field"},
+		{key: "tab", label: "mail"},
+		{key: "shift+tab", label: "prev mail"},
+		{key: "enter/esc/q", label: "save"},
 	}, m.width))
 	return b.String()
 }
