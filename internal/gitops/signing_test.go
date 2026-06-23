@@ -161,7 +161,6 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	if err := repo.SetMailAuthConfig(MailAuthConfig{
 		Email:         "alice@example.com",
 		SSHPrivateKey: "ssh-private-key-alice",
-		SSHPublicKey:  "ssh-public-key-alice",
 	}, false); err != nil {
 		t.Fatalf("set alice config: %v", err)
 	}
@@ -170,7 +169,7 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get alice config: %v", err)
 	}
-	if alice.SSHPrivateKey != "ssh-private-key-alice" || alice.SSHPublicKey != "ssh-public-key-alice" {
+	if alice.SSHPrivateKey != "ssh-private-key-alice" {
 		t.Fatalf("alice ssh keys = %+v", alice)
 	}
 
@@ -185,7 +184,7 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get bob config: %v", err)
 	}
-	if bob.SSHPrivateKey != "ssh-private-key-bob" || bob.SSHPublicKey != "" {
+	if bob.SSHPrivateKey != "ssh-private-key-bob" {
 		t.Fatalf("bob ssh keys = %+v", bob)
 	}
 
@@ -199,7 +198,7 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get alice config after unset: %v", err)
 	}
-	if alice2.SSHPrivateKey != "" || alice2.SSHPublicKey != "" {
+	if alice2.SSHPrivateKey != "" {
 		t.Fatalf("alice ssh keys should be empty after unset = %+v", alice2)
 	}
 }
@@ -218,7 +217,6 @@ func TestSigningConfigForEmailUsesPerEmailSSHKey(t *testing.T) {
 	if err := repo.SetMailAuthConfig(MailAuthConfig{
 		Email:         "alice@example.com",
 		SSHPrivateKey: "ssh-private-key-alice",
-		SSHPublicKey:  "ssh-public-key-alice",
 	}, false); err != nil {
 		t.Fatalf("set mail auth: %v", err)
 	}
@@ -227,7 +225,7 @@ func TestSigningConfigForEmailUsesPerEmailSSHKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get alice signing config: %v", err)
 	}
-	if !alice.SignCommits || alice.PrivateKey != "ssh-private-key-alice" || alice.SSHPublicKey != "ssh-public-key-alice" || alice.KeyType != "ssh" {
+	if !alice.SignCommits || alice.PrivateKey != "ssh-private-key-alice" || alice.KeyType != "ssh" {
 		t.Fatalf("alice signing config = %+v", alice)
 	}
 

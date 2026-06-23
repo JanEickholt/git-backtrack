@@ -132,7 +132,6 @@ func runAuth(args []string, stdout, stderr *os.File) int {
 		gitlabToken := fs.String("gitlab-token", "", "GitLab auth token for the email")
 		gpgPrivateKey := fs.String("gpg-private-key", "", "GPG private key file for the email")
 		sshPrivateKey := fs.String("ssh-private-key", "", "SSH private key file for the email")
-		sshPublicKey := fs.String("ssh-public-key", "", "SSH public key file for the email")
 		global := fs.Bool("global", true, "store in global git config (default)")
 		local := fs.Bool("local", false, "store in local repository config instead of global config")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -187,17 +186,6 @@ func runAuth(args []string, stdout, stderr *os.File) int {
 				return 1
 			}
 			cfg.SSHPrivateKey = key
-		}
-		if provided["ssh-public-key"] && strings.TrimSpace(*sshPublicKey) == "" {
-			cfg.SSHPublicKey = ""
-		}
-		if strings.TrimSpace(*sshPublicKey) != "" {
-			key, err := gitops.ReadSSHKey(*sshPublicKey)
-			if err != nil {
-				fmt.Fprintf(stderr, "Error reading SSH public key: %v\n", err)
-				return 1
-			}
-			cfg.SSHPublicKey = key
 		}
 		if err := repo.SetMailAuthConfig(cfg, useGlobal); err != nil {
 			fmt.Fprintf(stderr, "Error storing auth config: %v\n", err)
@@ -272,7 +260,7 @@ func providedFlags(fs *flag.FlagSet) map[string]bool {
 
 func printAuthUsage(out *os.File) {
 	fmt.Fprintln(out, `Usage:
-  git-backtrack auth set --email EMAIL [--github-token TOKEN] [--gitlab-token TOKEN] [--gpg-private-key PATH] [--ssh-private-key PATH] [--ssh-public-key PATH] [--global] [--local] [--path PATH]
+  git-backtrack auth set --email EMAIL [--github-token TOKEN] [--gitlab-token TOKEN] [--gpg-private-key PATH] [--ssh-private-key PATH] [--global] [--local] [--path PATH]
   git-backtrack auth get --email EMAIL [--show-tokens] [--path PATH]
   git-backtrack auth list [--show-tokens] [--path PATH]`)
 }
@@ -283,7 +271,6 @@ func printMailAuth(out *os.File, cfg gitops.MailAuthConfig, showTokens bool) {
 	fmt.Fprintf(out, "  gitlab-token: %s\n", printableSecret(cfg.GitLabToken, showTokens))
 	fmt.Fprintf(out, "  gpg-fingerprint: %s\n", valueOrUnset(gpgStatus(cfg)))
 	fmt.Fprintf(out, "  ssh-private-key: %s\n", sshStatus(cfg.SSHPrivateKey))
-	fmt.Fprintf(out, "  ssh-public-key: %s\n", sshStatus(cfg.SSHPublicKey))
 }
 
 func sshStatus(value string) string {

@@ -294,14 +294,6 @@ func (r *Repository) SetMailAuthConfig(cfg MailAuthConfig, global bool) error {
 			return err
 		}
 	}
-	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "ssh-public-key"), base64.StdEncoding.EncodeToString([]byte(cfg.SSHPublicKey))); err != nil {
-		return err
-	}
-	if cfg.SSHPublicKey == "" {
-		if err := r.configUnset(global, mailAuthKey(cfg.Email, "ssh-public-key")); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -349,12 +341,7 @@ func (r *Repository) getMailAuthConfig(email string, scopes []string) (*MailAuth
 				cfg.SSHPrivateKey = string(decoded)
 			}
 		}},
-		{"ssh-public-key", func(v string) {
-			decoded, err := base64.StdEncoding.DecodeString(v)
-			if err == nil {
-				cfg.SSHPublicKey = string(decoded)
-			}
-		}},
+
 	} {
 		for _, scope := range scopes {
 			value, ok, err := r.configGet(scope, mailAuthKey(email, item.key))
@@ -432,7 +419,6 @@ func (r *Repository) GetSigningConfigForEmail(email string) (*SigningConfig, err
 		cfg.KeyType = "gpg"
 	} else if mailCfg.SSHPrivateKey != "" {
 		cfg.PrivateKey = mailCfg.SSHPrivateKey
-		cfg.SSHPublicKey = mailCfg.SSHPublicKey
 		cfg.KeyType = "ssh"
 	}
 	return cfg, nil
@@ -578,11 +564,16 @@ func (r *Repository) signCommitSSH(commitHash plumbing.Hash, signingConfig *Sign
 		if err := os.WriteFile(idPath, []byte(signingConfig.PrivateKey), 0600); err != nil {
 			return commitHash, fmt.Errorf("failed to write ssh private key: %w", err)
 		}
-		if signingConfig.SSHPublicKey != "" {
-			pubPath := filepath.Join(tmpDir, "id.pub")
-			if err := os.WriteFile(pubPath, []byte(signingConfig.SSHPublicKey), 0644); err != nil {
-				return commitHash, fmt.Errorf("failed to write ssh public key: %w", err)
-			}
+		// derive public key from private key
+		deriveCmd := exec.Command("ssh-keygen", "-y", "-f", idPath)
+		deriveCmd.Env = os.Environ()
+		pubKey, err := deriveCmd.Output()
+		if err != nil {
+			return commitHash, fmt.Errorf("failed to derive ssh public key from private key: %w", err)
+		}
+		pubPath := filepath.Join(tmpDir, "id.pub")
+		if err := os.WriteFile(pubPath, pubKey, 0644); err != nil {
+			return commitHash, fmt.Errorf("failed to write ssh public key: %w", err)
 		}
 		keyPath = idPath
 	} else {
