@@ -81,7 +81,9 @@ func (r *Repository) listCommitsWithGraph(order GraphOrder, refArgs ...string) (
 	}
 
 	graph := ParseGraphRows(output)
-	commitInfos, err := r.listCommitInfoFromGit(refArgs...)
+	infoArgs := append([]string{}, order.GitLogArgs()...)
+	infoArgs = append(infoArgs, refArgs...)
+	commitInfos, err := r.listCommitInfoFromGit(infoArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -119,6 +121,7 @@ func (r *Repository) listCommitInfoFromGit(refArgs ...string) ([]CommitInfo, err
 		"log",
 		"--no-color",
 		"--numstat",
+		"--diff-merges=first-parent",
 		"--format=" + commitRecordMarker + "%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%B%x1f",
 	}
 	args = append(args, refArgs...)
