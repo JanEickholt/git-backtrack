@@ -148,6 +148,98 @@ func TestMailAuthConfigReadsLegacyGPGKeyFallback(t *testing.T) {
 	}
 }
 
+func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
+	dir := initGitRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+
+	if err := repo.SetMailAuthConfig(MailAuthConfig{
+		Email:         "alice@example.com",
+		SSHPrivateKey: "ssh-private-key-alice",
+		SSHPublicKey:  "ssh-public-key-alice",
+	}, false); err != nil {
+		t.Fatalf("set alice config: %v", err)
+	}
+
+	alice, err := repo.GetMailAuthConfig("alice@example.com")
+	if err != nil {
+		t.Fatalf("get alice config: %v", err)
+	}
+	if alice.SSHPrivateKey != "ssh-private-key-alice" || alice.SSHPublicKey != "ssh-public-key-alice" {
+		t.Fatalf("alice ssh keys = %+v", alice)
+	}
+
+	if err := repo.SetMailAuthConfig(MailAuthConfig{
+		Email:         "bob@example.com",
+		SSHPrivateKey: "ssh-private-key-bob",
+	}, false); err != nil {
+		t.Fatalf("set bob config: %v", err)
+	}
+
+	bob, err := repo.GetMailAuthConfig("bob@example.com")
+	if err != nil {
+		t.Fatalf("get bob config: %v", err)
+	}
+	if bob.SSHPrivateKey != "ssh-private-key-bob" || bob.SSHPublicKey != "" {
+		t.Fatalf("bob ssh keys = %+v", bob)
+	}
+
+	// Verify unsetting works
+	if err := repo.SetMailAuthConfig(MailAuthConfig{
+		Email: "alice@example.com",
+	}, false); err != nil {
+		t.Fatalf("unset alice config: %v", err)
+	}
+	alice2, err := repo.GetMailAuthConfig("alice@example.com")
+	if err != nil {
+		t.Fatalf("get alice config after unset: %v", err)
+	}
+	if alice2.SSHPrivateKey != "" || alice2.SSHPublicKey != "" {
+		t.Fatalf("alice ssh keys should be empty after unset = %+v", alice2)
+	}
+}
+
+func TestSigningConfigForEmailUsesPerEmailSSHKey(t *testing.T) {
+	dir := initGitRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+	gitOutput(t, dir, "config", "commit.gpgsign", "true")
+	gitOutput(t, dir, "config", "user.signingkey", "DEFAULT")
+
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	if err := repo.SetMailAuthConfig(MailAuthConfig{
+		Email:         "alice@example.com",
+		SSHPrivateKey: "ssh-private-key-alice",
+		SSHPublicKey:  "ssh-public-key-alice",
+	}, false); err != nil {
+		t.Fatalf("set mail auth: %v", err)
+	}
+
+	alice, err := repo.GetSigningConfigForEmail("alice@example.com")
+	if err != nil {
+		t.Fatalf("get alice signing config: %v", err)
+	}
+	if !alice.SignCommits || alice.PrivateKey != "ssh-private-key-alice" || alice.SSHPublicKey != "ssh-public-key-alice" || alice.KeyType != "ssh" {
+		t.Fatalf("alice signing config = %+v", alice)
+	}
+
+	bob, err := repo.GetSigningConfigForEmail("bob@example.com")
+	if err != nil {
+		t.Fatalf("get bob signing config: %v", err)
+	}
+	if !bob.SignCommits || bob.SigningKey != "DEFAULT" || bob.KeyType != "gpg" {
+		t.Fatalf("bob signing config = %+v", bob)
+	}
+}
+
 func TestParseGPGFingerprintRequiresSecretKey(t *testing.T) {
 	secret := "sec:-:4096:1:ABC:0:0::::::scESC:::+:::23::0:\n" +
 		"fpr:::::::::0123456789ABCDEF0123456789ABCDEF01234567:\n" +

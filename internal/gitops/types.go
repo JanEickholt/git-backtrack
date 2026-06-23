@@ -23,6 +23,7 @@ type SigningConfig struct {
 	SigningKey  string
 	PrivateKey  string
 	KeyType     string
+	SSHPublicKey string
 }
 
 type MailAuthConfig struct {
@@ -33,6 +34,8 @@ type MailAuthConfig struct {
 	GPGPrivateKey  string
 	GPGFingerprint string
 	GPGKeyID       string
+	SSHPrivateKey  string
+	SSHPublicKey   string
 }
 
 type UserIdentity struct {

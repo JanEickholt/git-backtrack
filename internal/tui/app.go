@@ -826,7 +826,7 @@ func (m *Model) toggleSetting(item SettingItem) {
 }
 
 func (m *Model) initAuthFields() {
-	m.authFields = make([]textinput.Model, 4)
+	m.authFields = make([]textinput.Model, 6)
 	email := m.defaultAuthEmail()
 	m.authEmails = m.authEmailCandidates(email)
 	if !containsString(m.authEmails, strings.ToLower(strings.TrimSpace(email))) && len(m.authEmails) > 0 {
@@ -839,8 +839,8 @@ func (m *Model) initAuthFields() {
 			cfg = existing
 		}
 	}
-	placeholders := []string{"email@example.com", "GitHub token", "GitLab token", "GPG private key path"}
-	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, ""}
+	placeholders := []string{"email@example.com", "GitHub token", "GitLab token", "GPG private key path", "SSH private key path", "SSH public key path"}
+	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, "", cfg.SSHPrivateKey, cfg.SSHPublicKey}
 	for i := range m.authFields {
 		m.authFields[i] = textinput.New()
 		m.authFields[i].Placeholder = placeholders[i]
@@ -853,7 +853,7 @@ func (m *Model) initAuthFields() {
 
 func (m *Model) loadAuthEmail(email string) {
 	email = strings.TrimSpace(email)
-	if len(m.authFields) < 4 {
+	if len(m.authFields) < 6 {
 		return
 	}
 	cfg := &gitops.MailAuthConfig{Email: email}
@@ -862,7 +862,7 @@ func (m *Model) loadAuthEmail(email string) {
 			cfg = existing
 		}
 	}
-	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, ""}
+	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, "", cfg.SSHPrivateKey, cfg.SSHPublicKey}
 	for i, value := range values {
 		m.authFields[i].SetValue(value)
 	}
@@ -913,7 +913,7 @@ func (m Model) defaultAuthEmail() string {
 func (m Model) handleAuthSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	save := func() {
-		if len(m.authFields) >= 4 {
+		if len(m.authFields) >= 6 {
 			email := m.authFields[0].Value()
 			if strings.TrimSpace(email) == "" {
 				return
@@ -935,6 +935,31 @@ func (m Model) handleAuthSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				cfg.GPGFingerprint = fingerprint
 				cfg.GPGKeyID = keyID
 				cfg.GPGKey = ""
+			} else {
+				cfg.GPGPrivateKey = ""
+				cfg.GPGFingerprint = ""
+				cfg.GPGKeyID = ""
+				cfg.GPGKey = ""
+			}
+			if path := strings.TrimSpace(m.authFields[4].Value()); path != "" {
+				key, err := gitops.ReadSSHKey(path)
+				if err != nil {
+					m.err = err
+					return
+				}
+				cfg.SSHPrivateKey = key
+			} else {
+				cfg.SSHPrivateKey = ""
+			}
+			if path := strings.TrimSpace(m.authFields[5].Value()); path != "" {
+				key, err := gitops.ReadSSHKey(path)
+				if err != nil {
+					m.err = err
+					return
+				}
+				cfg.SSHPublicKey = key
+			} else {
+				cfg.SSHPublicKey = ""
 			}
 			err := m.repo.SetMailAuthConfig(cfg, true)
 			if err != nil {
@@ -2209,6 +2234,9 @@ func (m Model) authKeysSummary() string {
 	} else if cfg.GPGKey != "" {
 		parts = append(parts, "GPG "+cfg.GPGKey)
 	}
+	if cfg.SSHPrivateKey != "" {
+		parts = append(parts, "SSH set")
+	}
 	return strings.Join(parts, ", ")
 }
 
@@ -2226,14 +2254,14 @@ func (m Model) renderAuthSettingsView() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("Auth Keys"))
 	b.WriteString("\n\n")
-	labels := []string{"Email", "GitHub token", "GitLab token", "GPG private key path"}
+	labels := []string{"Email", "GitHub token", "GitLab token", "GPG private key path", "SSH private key path", "SSH public key path"}
 	for i, field := range m.authFields {
 		b.WriteString(labelStyle.Render(labels[i]))
 		b.WriteString("\n")
 		b.WriteString(field.View())
 		b.WriteString("\n\n")
 	}
-	b.WriteString(statusStyle.Render("Saved to global git config for this email. Stored GPG key material is not shown."))
+	b.WriteString(statusStyle.Render("Saved to global git config for this email. Stored key material is not shown."))
 	b.WriteString("\n\n")
 	b.WriteString(renderFooter([]footerAction{
 		{key: "↑/↓", label: "field"},

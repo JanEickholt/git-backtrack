@@ -125,6 +125,21 @@ func mailAuthKey(email, key string) string {
 	return mailAuthSection(email) + "." + key
 }
 
+func ReadSSHKey(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("ssh key path is required")
+	}
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if len(key) == 0 {
+		return "", fmt.Errorf("ssh key file is empty: %s", path)
+	}
+	return string(key), nil
+}
+
 func ReadGPGPrivateKey(path string) (string, string, string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -271,6 +286,22 @@ func (r *Repository) SetMailAuthConfig(cfg MailAuthConfig, global bool) error {
 			return err
 		}
 	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "ssh-private-key"), base64.StdEncoding.EncodeToString([]byte(cfg.SSHPrivateKey))); err != nil {
+		return err
+	}
+	if cfg.SSHPrivateKey == "" {
+		if err := r.configUnset(global, mailAuthKey(cfg.Email, "ssh-private-key")); err != nil {
+			return err
+		}
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "ssh-public-key"), base64.StdEncoding.EncodeToString([]byte(cfg.SSHPublicKey))); err != nil {
+		return err
+	}
+	if cfg.SSHPublicKey == "" {
+		if err := r.configUnset(global, mailAuthKey(cfg.Email, "ssh-public-key")); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -310,6 +341,18 @@ func (r *Repository) getMailAuthConfig(email string, scopes []string) (*MailAuth
 		{"pgp-key", func(v string) {
 			if cfg.GPGKey == "" {
 				cfg.GPGKey = v
+			}
+		}},
+		{"ssh-private-key", func(v string) {
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err == nil {
+				cfg.SSHPrivateKey = string(decoded)
+			}
+		}},
+		{"ssh-public-key", func(v string) {
+			decoded, err := base64.StdEncoding.DecodeString(v)
+			if err == nil {
+				cfg.SSHPublicKey = string(decoded)
 			}
 		}},
 	} {
@@ -387,6 +430,10 @@ func (r *Repository) GetSigningConfigForEmail(email string) (*SigningConfig, err
 	} else if mailCfg.GPGKey != "" {
 		cfg.SigningKey = mailCfg.GPGKey
 		cfg.KeyType = "gpg"
+	} else if mailCfg.SSHPrivateKey != "" {
+		cfg.PrivateKey = mailCfg.SSHPrivateKey
+		cfg.SSHPublicKey = mailCfg.SSHPublicKey
+		cfg.KeyType = "ssh"
 	}
 	return cfg, nil
 }
@@ -520,7 +567,27 @@ func (r *Repository) signCommitSSH(commitHash plumbing.Hash, signingConfig *Sign
 	sigFile := tmpFile.Name() + ".sig"
 	defer os.Remove(sigFile)
 
-	keyPath := strings.TrimPrefix(signingConfig.SigningKey, "key::")
+	var keyPath string
+	if signingConfig.PrivateKey != "" {
+		tmpDir, err := os.MkdirTemp("", "git-backtrack-ssh-*")
+		if err != nil {
+			return commitHash, err
+		}
+		defer os.RemoveAll(tmpDir)
+		idPath := filepath.Join(tmpDir, "id")
+		if err := os.WriteFile(idPath, []byte(signingConfig.PrivateKey), 0600); err != nil {
+			return commitHash, fmt.Errorf("failed to write ssh private key: %w", err)
+		}
+		if signingConfig.SSHPublicKey != "" {
+			pubPath := filepath.Join(tmpDir, "id.pub")
+			if err := os.WriteFile(pubPath, []byte(signingConfig.SSHPublicKey), 0644); err != nil {
+				return commitHash, fmt.Errorf("failed to write ssh public key: %w", err)
+			}
+		}
+		keyPath = idPath
+	} else {
+		keyPath = strings.TrimPrefix(signingConfig.SigningKey, "key::")
+	}
 	cmd := exec.Command("ssh-keygen", "-Y", "sign", "-f", keyPath, "-n", "git", tmpFile.Name())
 	cmd.Env = os.Environ()
 	if out, err := cmd.CombinedOutput(); err != nil {
