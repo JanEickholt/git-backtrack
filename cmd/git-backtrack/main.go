@@ -270,24 +270,35 @@ func printMailAuth(out *os.File, cfg gitops.MailAuthConfig, showTokens bool) {
 	fmt.Fprintf(out, "  github-token: %s\n", printableSecret(cfg.GitHubToken, showTokens))
 	fmt.Fprintf(out, "  gitlab-token: %s\n", printableSecret(cfg.GitLabToken, showTokens))
 	fmt.Fprintf(out, "  gpg-fingerprint: %s\n", valueOrUnset(gpgStatus(cfg)))
-	fmt.Fprintf(out, "  ssh-private-key: %s\n", sshStatus(cfg.SSHPrivateKey))
+	fmt.Fprintf(out, "  ssh-private-key: %s\n", sshStatus(cfg))
 }
 
-func sshStatus(value string) string {
-	if value == "" {
-		return "<unset>"
+func sshStatus(cfg gitops.MailAuthConfig) string {
+	if cfg.SSHPrivateKeyPath != "" {
+		return "[path: " + cfg.SSHPrivateKeyPath + "]"
 	}
-	return "<set>"
+	if cfg.SSHPrivateKey != "" {
+		return "<set>"
+	}
+	return "<unset>"
 }
 
 func gpgStatus(cfg gitops.MailAuthConfig) string {
+	var keyInfo string
 	if cfg.GPGFingerprint != "" {
-		return cfg.GPGFingerprint
+		keyInfo = cfg.GPGFingerprint
+	} else if cfg.GPGKeyID != "" {
+		keyInfo = cfg.GPGKeyID
+	} else {
+		keyInfo = cfg.GPGKey
 	}
-	if cfg.GPGKeyID != "" {
-		return cfg.GPGKeyID
+	if cfg.GPGPrivateKeyPath != "" {
+		if keyInfo != "" {
+			return keyInfo + " [path: " + cfg.GPGPrivateKeyPath + "]"
+		}
+		return "[path: " + cfg.GPGPrivateKeyPath + "]"
 	}
-	return cfg.GPGKey
+	return keyInfo
 }
 
 func printableSecret(value string, show bool) string {

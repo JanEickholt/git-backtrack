@@ -16,12 +16,13 @@ func TestMailAuthConfigStoresPerEmailCredentials(t *testing.T) {
 	}
 
 	if err := repo.SetMailAuthConfig(MailAuthConfig{
-		Email:          "Alice@Example.COM",
-		GitHubToken:    "ghp_alice",
-		GitLabToken:    "glpat-alice",
-		GPGPrivateKey:  "private-key-alice",
-		GPGFingerprint: "FINGERPRINTALICE",
-		GPGKeyID:       "KEYIDALICE",
+		Email:             "Alice@Example.COM",
+		GitHubToken:       "ghp_alice",
+		GitLabToken:       "glpat-alice",
+		GPGPrivateKey:     "private-key-alice",
+		GPGFingerprint:    "FINGERPRINTALICE",
+		GPGKeyID:          "KEYIDALICE",
+		GPGPrivateKeyPath: "/path/to/alice-gpg.key",
 	}, false); err != nil {
 		t.Fatalf("set alice config: %v", err)
 	}
@@ -38,7 +39,7 @@ func TestMailAuthConfigStoresPerEmailCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get alice config: %v", err)
 	}
-	if alice.Email != "alice@example.com" || alice.GitHubToken != "ghp_alice" || alice.GitLabToken != "glpat-alice" || alice.GPGPrivateKey != "private-key-alice" || alice.GPGFingerprint != "FINGERPRINTALICE" || alice.GPGKeyID != "KEYIDALICE" {
+	if alice.Email != "alice@example.com" || alice.GitHubToken != "ghp_alice" || alice.GitLabToken != "glpat-alice" || alice.GPGPrivateKey != "private-key-alice" || alice.GPGFingerprint != "FINGERPRINTALICE" || alice.GPGKeyID != "KEYIDALICE" || alice.GPGPrivateKeyPath != "/path/to/alice-gpg.key" {
 		t.Fatalf("alice config = %+v", alice)
 	}
 
@@ -159,8 +160,9 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	}
 
 	if err := repo.SetMailAuthConfig(MailAuthConfig{
-		Email:         "alice@example.com",
-		SSHPrivateKey: "ssh-private-key-alice",
+		Email:             "alice@example.com",
+		SSHPrivateKey:     "ssh-private-key-alice",
+		SSHPrivateKeyPath: "/path/to/alice-ssh.key",
 	}, false); err != nil {
 		t.Fatalf("set alice config: %v", err)
 	}
@@ -169,13 +171,14 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get alice config: %v", err)
 	}
-	if alice.SSHPrivateKey != "ssh-private-key-alice" {
+	if alice.SSHPrivateKey != "ssh-private-key-alice" || alice.SSHPrivateKeyPath != "/path/to/alice-ssh.key" {
 		t.Fatalf("alice ssh keys = %+v", alice)
 	}
 
 	if err := repo.SetMailAuthConfig(MailAuthConfig{
-		Email:         "bob@example.com",
-		SSHPrivateKey: "ssh-private-key-bob",
+		Email:             "bob@example.com",
+		SSHPrivateKey:     "ssh-private-key-bob",
+		SSHPrivateKeyPath: "/path/to/bob-ssh.key",
 	}, false); err != nil {
 		t.Fatalf("set bob config: %v", err)
 	}
@@ -184,7 +187,7 @@ func TestMailAuthConfigStoresSSHKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get bob config: %v", err)
 	}
-	if bob.SSHPrivateKey != "ssh-private-key-bob" {
+	if bob.SSHPrivateKey != "ssh-private-key-bob" || bob.SSHPrivateKeyPath != "/path/to/bob-ssh.key" {
 		t.Fatalf("bob ssh keys = %+v", bob)
 	}
 

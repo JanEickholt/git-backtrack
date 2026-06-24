@@ -840,7 +840,7 @@ func (m *Model) initAuthFields() {
 		}
 	}
 	placeholders := []string{"email@example.com", "GitHub token", "GitLab token", "GPG private key path", "SSH private key path"}
-	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, "", cfg.SSHPrivateKey}
+	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, cfg.GPGPrivateKeyPath, cfg.SSHPrivateKeyPath}
 	for i := range m.authFields {
 		m.authFields[i] = textinput.New()
 		m.authFields[i].Placeholder = placeholders[i]
@@ -862,7 +862,7 @@ func (m *Model) loadAuthEmail(email string) {
 			cfg = existing
 		}
 	}
-	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, "", cfg.SSHPrivateKey}
+	values := []string{cfg.Email, cfg.GitHubToken, cfg.GitLabToken, cfg.GPGPrivateKeyPath, cfg.SSHPrivateKeyPath}
 	for i, value := range values {
 		m.authFields[i].SetValue(value)
 	}
@@ -925,8 +925,9 @@ func (m Model) handleAuthSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cfg.Email = email
 			cfg.GitHubToken = m.authFields[1].Value()
 			cfg.GitLabToken = m.authFields[2].Value()
-			if path := strings.TrimSpace(m.authFields[3].Value()); path != "" {
-				privateKey, fingerprint, keyID, err := gitops.ReadGPGPrivateKey(path)
+			gpgPath := strings.TrimSpace(m.authFields[3].Value())
+			if gpgPath != "" {
+				privateKey, fingerprint, keyID, err := gitops.ReadGPGPrivateKey(gpgPath)
 				if err != nil {
 					m.err = err
 					return
@@ -935,21 +936,26 @@ func (m Model) handleAuthSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				cfg.GPGFingerprint = fingerprint
 				cfg.GPGKeyID = keyID
 				cfg.GPGKey = ""
+				cfg.GPGPrivateKeyPath = gpgPath
 			} else {
 				cfg.GPGPrivateKey = ""
 				cfg.GPGFingerprint = ""
 				cfg.GPGKeyID = ""
 				cfg.GPGKey = ""
+				cfg.GPGPrivateKeyPath = ""
 			}
-			if path := strings.TrimSpace(m.authFields[4].Value()); path != "" {
-				key, err := gitops.ReadSSHKey(path)
+			sshPath := strings.TrimSpace(m.authFields[4].Value())
+			if sshPath != "" {
+				key, err := gitops.ReadSSHKey(sshPath)
 				if err != nil {
 					m.err = err
 					return
 				}
 				cfg.SSHPrivateKey = key
+				cfg.SSHPrivateKeyPath = sshPath
 			} else {
 				cfg.SSHPrivateKey = ""
+				cfg.SSHPrivateKeyPath = ""
 			}
 			err := m.repo.SetMailAuthConfig(cfg, true)
 			if err != nil {

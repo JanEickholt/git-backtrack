@@ -305,6 +305,9 @@ func (r *Repository) SetMailAuthConfig(cfg MailAuthConfig, global bool) error {
 	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "gpg-key-id"), cfg.GPGKeyID); err != nil {
 		return err
 	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "gpg-private-key-path"), cfg.GPGPrivateKeyPath); err != nil {
+		return err
+	}
 	if cfg.GPGPrivateKey != "" || cfg.GPGKey == "" {
 		if err := r.configUnset(global, mailAuthKey(cfg.Email, "gpg-key")); err != nil {
 			return err
@@ -320,6 +323,9 @@ func (r *Repository) SetMailAuthConfig(cfg MailAuthConfig, global bool) error {
 		if err := r.configUnset(global, mailAuthKey(cfg.Email, "ssh-private-key")); err != nil {
 			return err
 		}
+	}
+	if err := r.configSetOrUnset(global, mailAuthKey(cfg.Email, "ssh-private-key-path"), cfg.SSHPrivateKeyPath); err != nil {
+		return err
 	}
 	return nil
 }
@@ -368,7 +374,8 @@ func (r *Repository) getMailAuthConfig(email string, scopes []string) (*MailAuth
 				cfg.SSHPrivateKey = string(decoded)
 			}
 		}},
-
+		{"gpg-private-key-path", func(v string) { cfg.GPGPrivateKeyPath = v }},
+		{"ssh-private-key-path", func(v string) { cfg.SSHPrivateKeyPath = v }},
 	} {
 		for _, scope := range scopes {
 			value, ok, err := r.configGet(scope, mailAuthKey(email, item.key))

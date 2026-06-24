@@ -26,14 +26,16 @@ type SigningConfig struct {
 }
 
 type MailAuthConfig struct {
-	Email          string
-	GitHubToken    string
-	GitLabToken    string
-	GPGKey         string
-	GPGPrivateKey  string
-	GPGFingerprint string
-	GPGKeyID       string
-	SSHPrivateKey  string
+	Email             string
+	GitHubToken       string
+	GitLabToken       string
+	GPGKey            string
+	GPGPrivateKey     string
+	GPGFingerprint    string
+	GPGKeyID          string
+	GPGPrivateKeyPath string
+	SSHPrivateKey     string
+	SSHPrivateKeyPath string
 }
 
 type UserIdentity struct {
