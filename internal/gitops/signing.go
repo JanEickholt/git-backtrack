@@ -125,10 +125,33 @@ func mailAuthKey(email, key string) string {
 	return mailAuthSection(email) + "." + key
 }
 
+func expandTilde(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return home, nil
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, path[2:]), nil
+	}
+	return path, nil
+}
+
 func ReadSSHKey(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", fmt.Errorf("ssh key path is required")
+	}
+	path, err := expandTilde(path)
+	if err != nil {
+		return "", err
 	}
 	key, err := os.ReadFile(path)
 	if err != nil {
@@ -144,6 +167,10 @@ func ReadGPGPrivateKey(path string) (string, string, string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return "", "", "", fmt.Errorf("gpg private key path is required")
+	}
+	path, err := expandTilde(path)
+	if err != nil {
+		return "", "", "", err
 	}
 	key, err := os.ReadFile(path)
 	if err != nil {
