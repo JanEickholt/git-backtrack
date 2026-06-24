@@ -27,6 +27,7 @@ type keyMap struct {
 	CompleteNext key.Binding
 	CompletePrev key.Binding
 	CompletePick key.Binding
+	ShiftEnter   key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -66,8 +67,9 @@ func defaultKeyMap() keyMap {
 		TimingFix:    key.NewBinding(key.WithKeys("T"), key.WithHelp("T", "fix time")),
 		SwitchBranch: key.NewBinding(key.WithKeys("B"), key.WithHelp("B", "switch branch")),
 		Settings:     key.NewBinding(key.WithKeys("s"), key.WithHelp("s", "settings")),
-		CompleteNext: key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "next completion")),
-		CompletePrev: key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "prev completion")),
+		CompleteNext: key.NewBinding(key.WithKeys("ctrl+n", "right"), key.WithHelp("→/ctrl+n", "next completion")),
+		CompletePrev: key.NewBinding(key.WithKeys("ctrl+p", "left"), key.WithHelp("←/ctrl+p", "prev completion")),
 		CompletePick: key.NewBinding(key.WithKeys("ctrl+y"), key.WithHelp("ctrl+y", "accept completion")),
+		ShiftEnter:   key.NewBinding(key.WithKeys("shift+enter"), key.WithHelp("shift+enter", "next field")),
 	}
 }

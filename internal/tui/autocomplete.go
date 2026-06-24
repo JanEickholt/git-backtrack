@@ -7,6 +7,7 @@ import (
 )
 
 const maxAuthorCompletions = 5
+const noCompletionIndex = -1
 
 type authorCompletionKind int
 

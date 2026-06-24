@@ -514,7 +514,7 @@ func (m *Model) initEditFields() {
 	m.messageField.SetHeight(messageHeight(msg))
 
 	m.focusField = FieldName
-	m.completeIdx = 0
+	m.completeIdx = noCompletionIndex
 }
 
 func messageHeight(msg string) int {
@@ -608,7 +608,7 @@ func (m *Model) initBatchFields() {
 	m.batchFields[4].Width = 40
 
 	m.batchFocus = 0
-	m.completeIdx = 0
+	m.completeIdx = noCompletionIndex
 }
 
 func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -621,6 +621,11 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Confirm):
+		if _, ok := editCompletionKind(m.focusField); ok {
+			if m.acceptEditCompletion(true) {
+				return m, nil
+			}
+		}
 		before := cloneForgeChanges(m.editQueue)
 		change := m.buildForgeChange()
 		hashStr := change.OriginalHash.String()
@@ -662,14 +667,15 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.editingCommit = nil
 		return m, nil
 
-	case key.Matches(msg, m.keys.Tab):
+	case key.Matches(msg, m.keys.Tab),
+		key.Matches(msg, m.keys.ShiftEnter) && m.focusField != Message:
 		if m.focusField == Message {
 			m.messageField.Blur()
 		} else {
 			m.editFields[m.focusField].Blur()
 		}
 		m.focusField = (m.focusField + 1) % 5
-		m.completeIdx = 0
+		m.completeIdx = noCompletionIndex
 		if m.focusField == Message {
 			m.messageField.Focus()
 		} else {
@@ -684,7 +690,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editFields[m.focusField].Blur()
 		}
 		m.focusField = (m.focusField + 4) % 5
-		m.completeIdx = 0
+		m.completeIdx = noCompletionIndex
 		if m.focusField == Message {
 			m.messageField.Focus()
 		} else {
@@ -703,7 +709,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case key.Matches(msg, m.keys.CompletePick):
-		if m.acceptEditCompletion() {
+		if m.acceptEditCompletion(false) {
 			return m, nil
 		}
 	}
@@ -714,7 +720,7 @@ func (m Model) handleEditKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		before := m.editFields[m.focusField].Value()
 		m.editFields[m.focusField], cmd = m.editFields[m.focusField].Update(msg)
 		if m.editFields[m.focusField].Value() != before {
-			m.completeIdx = 0
+			m.completeIdx = noCompletionIndex
 		}
 	}
 	return m, cmd
@@ -734,18 +740,32 @@ func (m *Model) moveEditCompletion(direction int) bool {
 	if !ok {
 		return false
 	}
-	m.completeIdx = normalizedCompletionIndex(m.completeIdx+direction, candidates)
+	if m.completeIdx == noCompletionIndex {
+		if direction > 0 {
+			m.completeIdx = 0
+		} else {
+			m.completeIdx = len(candidates) - 1
+		}
+	} else {
+		m.completeIdx = normalizedCompletionIndex(m.completeIdx+direction, candidates)
+	}
 	return true
 }
 
-func (m *Model) acceptEditCompletion() bool {
+func (m *Model) acceptEditCompletion(requireSelected bool) bool {
 	candidates, ok := m.editCompletionCandidates()
 	if !ok {
 		return false
 	}
-	m.completeIdx = normalizedCompletionIndex(m.completeIdx, candidates)
-	m.editFields[m.focusField].SetValue(candidates[m.completeIdx])
-	m.completeIdx = 0
+	idx := m.completeIdx
+	if idx < 0 {
+		if requireSelected {
+			return false
+		}
+		idx = 0
+	}
+	m.editFields[m.focusField].SetValue(candidates[normalizedCompletionIndex(idx, candidates)])
+	m.completeIdx = noCompletionIndex
 	return true
 }
 
@@ -1073,19 +1093,24 @@ func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case key.Matches(msg, m.keys.Confirm):
+			if _, ok := batchCompletionKind(m.batchFocus); ok {
+				if m.acceptBatchCompletion(true) {
+					return m, nil
+				}
+			}
 			return m.applyBatchChanges()
 
-		case key.Matches(msg, m.keys.Tab):
+		case key.Matches(msg, m.keys.Tab), key.Matches(msg, m.keys.ShiftEnter):
 			m.batchFields[m.batchFocus].Blur()
 			m.batchFocus = (m.batchFocus + 1) % 5
-			m.completeIdx = 0
+			m.completeIdx = noCompletionIndex
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
 
 		case key.Matches(msg, m.keys.ShiftTab):
 			m.batchFields[m.batchFocus].Blur()
 			m.batchFocus = (m.batchFocus + 4) % 5
-			m.completeIdx = 0
+			m.completeIdx = noCompletionIndex
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
 
@@ -1100,7 +1125,7 @@ func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case key.Matches(msg, m.keys.CompletePick):
-			if m.acceptBatchCompletion() {
+			if m.acceptBatchCompletion(false) {
 				return m, nil
 			}
 		}
@@ -1110,7 +1135,7 @@ func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.batchFields[m.batchFocus].Value()
 	m.batchFields[m.batchFocus], cmd = m.batchFields[m.batchFocus].Update(msg)
 	if m.batchFields[m.batchFocus].Value() != before {
-		m.completeIdx = 0
+		m.completeIdx = noCompletionIndex
 	}
 	return m, cmd
 }
@@ -1136,18 +1161,32 @@ func (m *Model) moveBatchCompletion(direction int) bool {
 	if !ok {
 		return false
 	}
-	m.completeIdx = normalizedCompletionIndex(m.completeIdx+direction, candidates)
+	if m.completeIdx == noCompletionIndex {
+		if direction > 0 {
+			m.completeIdx = 0
+		} else {
+			m.completeIdx = len(candidates) - 1
+		}
+	} else {
+		m.completeIdx = normalizedCompletionIndex(m.completeIdx+direction, candidates)
+	}
 	return true
 }
 
-func (m *Model) acceptBatchCompletion() bool {
+func (m *Model) acceptBatchCompletion(requireSelected bool) bool {
 	candidates, ok := m.batchCompletionCandidates()
 	if !ok {
 		return false
 	}
-	m.completeIdx = normalizedCompletionIndex(m.completeIdx, candidates)
-	m.batchFields[m.batchFocus].SetValue(candidates[m.completeIdx])
-	m.completeIdx = 0
+	idx := m.completeIdx
+	if idx < 0 {
+		if requireSelected {
+			return false
+		}
+		idx = 0
+	}
+	m.batchFields[m.batchFocus].SetValue(candidates[normalizedCompletionIndex(idx, candidates)])
+	m.completeIdx = noCompletionIndex
 	return true
 }
 
@@ -1898,14 +1937,21 @@ func (m Model) renderBatchEditView() string {
 	}
 
 	b.WriteString("\n")
-	actions := []footerAction{
-		{key: "tab", label: "next"},
-		{key: "enter", label: "apply"},
-		{key: "esc", label: "cancel"},
-	}
+	actions := []footerAction{{key: "tab", label: "next"}}
 	if _, ok := batchCompletionKind(m.batchFocus); ok {
-		actions = append([]footerAction{{key: "ctrl+n/p", label: "complete"}, {key: "ctrl+y", label: "accept"}}, actions...)
+		actions = append(actions, footerAction{key: "←/→", label: "complete"})
+		if m.completeIdx >= 0 {
+			actions = append(actions, footerAction{key: "enter", label: "accept"})
+		} else {
+			actions = append(actions, footerAction{key: "enter", label: "apply"})
+		}
+	} else {
+		actions = append(actions, footerAction{key: "enter", label: "apply"})
 	}
+	actions = append(actions,
+		footerAction{key: "shift+enter", label: "next"},
+		footerAction{key: "esc", label: "cancel"},
+	)
 	b.WriteString(renderFooter(actions, m.width))
 
 	return b.String()
@@ -1967,15 +2013,24 @@ func (m Model) renderEditView() string {
 	b.WriteString(displayCommitMessage(m.editingCommit.Message))
 	b.WriteString("\n\n")
 
-	actions := []footerAction{
-		{key: "tab", label: "next"},
-		{key: "enter", label: "save"},
-		{key: "shift+enter", label: "newline"},
-		{key: "esc", label: "cancel"},
-	}
+	actions := []footerAction{{key: "tab", label: "next"}}
 	if _, ok := editCompletionKind(m.focusField); ok {
-		actions = append([]footerAction{{key: "ctrl+n/p", label: "complete"}, {key: "ctrl+y", label: "accept"}}, actions...)
+		actions = append(actions, footerAction{key: "←/→", label: "complete"})
+		if m.completeIdx >= 0 {
+			actions = append(actions, footerAction{key: "enter", label: "accept"})
+		} else {
+			actions = append(actions, footerAction{key: "enter", label: "save"})
+		}
+	} else {
+		actions = append(actions, footerAction{key: "enter", label: "save"})
+		if m.focusField == Message {
+			actions = append(actions, footerAction{key: "shift+enter", label: "newline"})
+		}
 	}
+	if m.focusField != Message {
+		actions = append(actions, footerAction{key: "shift+enter", label: "next"})
+	}
+	actions = append(actions, footerAction{key: "esc", label: "cancel"})
 	b.WriteString(renderFooter(actions, m.width))
 
 	return b.String()
@@ -2001,11 +2056,10 @@ func renderCompletionLine(candidates []string, selected int) string {
 	if len(candidates) == 0 {
 		return ""
 	}
-	selected = normalizedCompletionIndex(selected, candidates)
 	parts := make([]string, 0, len(candidates))
 	for i, candidate := range candidates {
 		text := " " + candidate + " "
-		if i == selected {
+		if selected != noCompletionIndex && i == normalizedCompletionIndex(selected, candidates) {
 			parts = append(parts, completeHitStyle.Render(text))
 		} else {
 			parts = append(parts, completeStyle.Render(text))
