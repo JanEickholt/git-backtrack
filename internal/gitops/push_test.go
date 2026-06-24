@@ -41,6 +41,12 @@ func TestValidatePushHost(t *testing.T) {
 	if err := validatePushHost("https://gitlab.com/acme/repo.git", "GitLab"); err != nil {
 		t.Fatalf("validate gitlab host: %v", err)
 	}
+	if err := validatePushHost("https://gitlab.git.nrw/acme/repo.git", "GitLab"); err != nil {
+		t.Fatalf("validate self-hosted gitlab host: %v", err)
+	}
+	if err := validatePushHost("http://gitlab.git.nrw/acme/repo.git", "GitLab"); err == nil {
+		t.Fatalf("validatePushHost accepted non-https GitLab URL")
+	}
 }
 
 func TestShellSingleQuote(t *testing.T) {

@@ -111,7 +111,9 @@ func validatePushHost(pushURL, forge string) error {
 			return nil
 		}
 	case "GitLab":
-		if host == "gitlab.com" {
+		// Trust the configured remote host for GitLab tokens because GitLab is
+		// commonly self-hosted and the remote URL is already trusted by git.
+		if u.Scheme == "https" {
 			return nil
 		}
 	}
