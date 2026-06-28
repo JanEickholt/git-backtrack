@@ -2,6 +2,8 @@ package gitops
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
@@ -88,16 +90,36 @@ func (hr *HistoryRewriter) ListBackups() ([]string, error) {
 		return nil, fmt.Errorf("failed to list references: %w", err)
 	}
 
-	var backups []string
+	backupSet := map[string]bool{}
 	if err := refs.ForEach(func(ref *plumbing.Reference) error {
 		name := ref.Name().String()
-		if len(name) > 20 && name[:20] == "refs/backtrack-backup" {
-			backups = append(backups, name)
+		if strings.HasPrefix(name, "refs/backtrack-backup/") {
+			parts := strings.Split(name, "/")
+			if len(parts) >= 3 {
+				backupSet[strings.Join(parts[:3], "/")] = true
+			}
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
+	backups := make([]string, 0, len(backupSet))
+	for backup := range backupSet {
+		backups = append(backups, backup)
+	}
+	sort.Strings(backups)
+
 	return backups, nil
+}
+
+func (hr *HistoryRewriter) LatestBackup() (string, error) {
+	backups, err := hr.ListBackups()
+	if err != nil {
+		return "", err
+	}
+	if len(backups) == 0 {
+		return "", fmt.Errorf("no backups found")
+	}
+	return backups[len(backups)-1], nil
 }

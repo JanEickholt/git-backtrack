@@ -83,19 +83,13 @@ func (hr *HistoryRewriter) ApplyChanges(changes []ForgeChange) (*RewriteResult, 
 
 		newHash = newCommit.Hash
 
-		commitAuthorEmail := newCommit.Author.Email
-		shouldSign := useSigning
-		if shouldSign {
-			if myID, err := hr.repo.GetUserIdentity(); err == nil {
-				shouldSign = myID.Email != "" && myID.Email == commitAuthorEmail
-			} else {
-				shouldSign = false
+		if useSigning {
+			commitAuthorEmail := newCommit.Author.Email
+			signedHash, err := hr.repo.SignCommitForEmail(newHash, commitAuthorEmail)
+			if err != nil {
+				return nil, fmt.Errorf("failed to sign commit %s for %s: %w", commit.Hash.String()[:7], commitAuthorEmail, err)
 			}
-		}
-		if shouldSign {
-			if signedHash, err := hr.repo.SignCommit(newHash); err == nil {
-				newHash = signedHash
-			}
+			newHash = signedHash
 		}
 
 		hashMap[commit.Hash] = newHash
