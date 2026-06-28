@@ -139,6 +139,55 @@ func TestCalculateTimeSpreadDistributesFromOldest(t *testing.T) {
 	}
 }
 
+func TestCalculateSmartTimeAdjustWeightsCommitEffort(t *testing.T) {
+	oldest := plumbing.NewHash("1111111111111111111111111111111111111111")
+	lint := plumbing.NewHash("2222222222222222222222222222222222222222")
+	fix := plumbing.NewHash("3333333333333333333333333333333333333333")
+	commits := []gitops.CommitInfo{
+		{Hash: fix, Additions: 80, Deletions: 20, Message: "fix(svelte): resolve form error"},
+		{Hash: lint, Additions: 4, Deletions: 3, Message: "chore: fix lint errors"},
+		{Hash: oldest, Additions: 10, Deletions: 5, Message: "feat: add base view"},
+	}
+	selected := map[string]bool{
+		fix.String():    true,
+		lint.String():   true,
+		oldest.String(): true,
+	}
+
+	adjustments := calculateSmartTimeAdjust(commits, selected, 10*time.Hour)
+	fixGap := adjustments[fix.String()] - adjustments[lint.String()]
+	lintGap := adjustments[lint.String()] - adjustments[oldest.String()]
+
+	if adjustments[fix.String()] != 10*time.Hour {
+		t.Fatalf("newest adjustment = %s, want 10h", adjustments[fix.String()])
+	}
+	if adjustments[oldest.String()] != 0 {
+		t.Fatalf("oldest adjustment = %s, want 0", adjustments[oldest.String()])
+	}
+	if fixGap <= lintGap {
+		t.Fatalf("fix gap = %s, lint gap = %s; want fix gap larger", fixGap, lintGap)
+	}
+}
+
+func TestCalculateSmartTimeAdjustHandlesNegativeAdjustment(t *testing.T) {
+	older := plumbing.NewHash("1111111111111111111111111111111111111111")
+	newer := plumbing.NewHash("2222222222222222222222222222222222222222")
+	commits := []gitops.CommitInfo{
+		{Hash: newer, Additions: 100, Message: "fix: resolve bug"},
+		{Hash: older, Additions: 1, Message: "chore: prep"},
+	}
+	selected := map[string]bool{newer.String(): true, older.String(): true}
+
+	adjustments := calculateSmartTimeAdjust(commits, selected, -2*time.Hour)
+
+	if adjustments[newer.String()] != -2*time.Hour {
+		t.Fatalf("newer adjustment = %s, want -2h", adjustments[newer.String()])
+	}
+	if adjustments[older.String()] != 0 {
+		t.Fatalf("older adjustment = %s, want 0", adjustments[older.String()])
+	}
+}
+
 func TestDescendantSelectionIncludesRootAndChildren(t *testing.T) {
 	root := plumbing.NewHash("2222222222222222222222222222222222222222")
 	child := plumbing.NewHash("3333333333333333333333333333333333333333")
