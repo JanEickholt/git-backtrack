@@ -13,6 +13,7 @@ type keyMap struct {
 	Combine      key.Binding
 	Undo         key.Binding
 	Reset        key.Binding
+	Refresh      key.Binding
 	Apply        key.Binding
 	Quit         key.Binding
 	Confirm      key.Binding
@@ -30,7 +31,7 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Parent, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.TimingFix, k.SwitchBranch, k.Settings, k.Apply, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Parent, k.Edit, k.Drop, k.Combine, k.Undo, k.Select, k.BatchEdit, k.TimingFix, k.SwitchBranch, k.Settings, k.Refresh, k.Apply, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
@@ -38,7 +39,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Parent},
 		{k.Edit, k.Drop, k.Combine, k.Undo, k.Select},
 		{k.BatchEdit, k.TimingFix, k.Reset},
-		{k.SwitchBranch, k.Settings, k.Apply},
+		{k.SwitchBranch, k.Settings, k.Refresh, k.Apply},
 		{k.Quit},
 	}
 }
@@ -54,7 +55,8 @@ func defaultKeyMap() keyMap {
 		Drop:         key.NewBinding(key.WithKeys("d"), key.WithHelp("d", "drop")),
 		Combine:      key.NewBinding(key.WithKeys("f"), key.WithHelp("f", "fold")),
 		Undo:         key.NewBinding(key.WithKeys("u", "ctrl+z"), key.WithHelp("u", "undo")),
-		Reset:        key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "reset")),
+		Reset:        key.NewBinding(key.WithKeys("R"), key.WithHelp("R", "reset")),
+		Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 		Apply:        key.NewBinding(key.WithKeys("a"), key.WithHelp("a", "apply")),
 		Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		Confirm:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "confirm")),

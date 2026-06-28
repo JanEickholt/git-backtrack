@@ -364,6 +364,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Refresh):
+		m.refresh()
+		return m, nil
+
 	case key.Matches(msg, m.keys.Apply):
 		if len(m.editQueue) == 0 {
 			return m, nil
@@ -1536,6 +1540,7 @@ func (m Model) renderListFooter(selectedCount int) string {
 	actions = append(actions,
 		footerAction{key: "B", label: "switch"},
 		footerAction{key: "s", label: "settings"},
+		footerAction{key: "r", label: "refresh"},
 		footerAction{key: "a", label: "apply"},
 		footerAction{key: "q", label: "quit"},
 	)
