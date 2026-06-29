@@ -209,6 +209,15 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
 
+	if commit.IsUnpushed {
+		hashStyle = hashStyle.Bold(true)
+		authorStyle = authorStyle.Bold(true)
+		dateStyle = dateStyle.Bold(true)
+		addStyle = addStyle.Bold(true)
+		delStyle = delStyle.Bold(true)
+		msgStyle = msgStyle.Bold(true)
+	}
+
 	if highlight {
 		hashStyle = hashStyle.Background(bg)
 		authorStyle = authorStyle.Background(bg)

@@ -16,6 +16,7 @@ type CommitInfo struct {
 	Parents     []plumbing.Hash
 	Additions   int
 	Deletions   int
+	IsUnpushed  bool
 }
 
 type SigningConfig struct {

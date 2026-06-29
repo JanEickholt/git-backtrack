@@ -383,6 +383,10 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Refresh):
+		m.refresh()
+		return m, nil
+
 	case key.Matches(msg, m.keys.Apply):
 		if len(m.editQueue) == 0 {
 			return m, nil
@@ -579,7 +583,7 @@ func stripTerminalControls(value string) string {
 }
 
 func (m *Model) initBatchFields() {
-	m.batchFields = make([]textinput.Model, 5)
+	m.batchFields = make([]textinput.Model, 6)
 
 	m.batchFields[0] = textinput.New()
 	m.batchFields[0].Placeholder = "Author name (empty = keep original)"
@@ -606,6 +610,11 @@ func (m *Model) initBatchFields() {
 	m.batchFields[4].Placeholder = "Time spread: +1h, -30m (weighted distribution)"
 	m.batchFields[4].SetValue("")
 	m.batchFields[4].Width = 40
+
+	m.batchFields[5] = textinput.New()
+	m.batchFields[5].Placeholder = "Smart adjust: +10h (weighted by commit size/type)"
+	m.batchFields[5].SetValue("")
+	m.batchFields[5].Width = 40
 
 	m.batchFocus = 0
 	m.completeIdx = noCompletionIndex
@@ -1102,14 +1111,14 @@ func (m Model) handleBatchEditKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Tab), key.Matches(msg, m.keys.ShiftEnter):
 			m.batchFields[m.batchFocus].Blur()
-			m.batchFocus = (m.batchFocus + 1) % 5
+			m.batchFocus = (m.batchFocus + 1) % len(m.batchFields)
 			m.completeIdx = noCompletionIndex
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
 
 		case key.Matches(msg, m.keys.ShiftTab):
 			m.batchFields[m.batchFocus].Blur()
-			m.batchFocus = (m.batchFocus + 4) % 5
+			m.batchFocus = (m.batchFocus + len(m.batchFields) - 1) % len(m.batchFields)
 			m.completeIdx = noCompletionIndex
 			m.batchFields[m.batchFocus].Focus()
 			return m, nil
@@ -1196,6 +1205,7 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 	timeAdjust := strings.TrimSpace(m.batchFields[2].Value())
 	newMessage := strings.TrimSpace(m.batchFields[3].Value())
 	timeSpread := strings.TrimSpace(m.batchFields[4].Value())
+	smartAdjust := strings.TrimSpace(m.batchFields[5].Value())
 	before := cloneForgeChanges(m.editQueue)
 
 	if m.editMap == nil {
@@ -1209,6 +1219,15 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 		if d, ok := parseDuration(timeSpread); ok {
 			timeSpreadDuration = d
 			hasTimeSpread = true
+		}
+	}
+
+	var smartAdjustDuration time.Duration
+	var hasSmartAdjust bool
+	if smartAdjust != "" {
+		if d, ok := parseDuration(smartAdjust); ok {
+			smartAdjustDuration = d
+			hasSmartAdjust = true
 		}
 	}
 
@@ -1317,6 +1336,57 @@ func (m Model) applyBatchChanges() (tea.Model, tea.Cmd) {
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	for i := range m.editQueue {
 		m.editMap[m.editQueue[i].OriginalHash.String()] = &m.editQueue[i]
+	}
+
+	if hasSmartAdjust {
+		smartAdjustMap := calculateSmartTimeAdjust(m.commits, m.selectedCommits, smartAdjustDuration)
+		for hashStr, smartDuration := range smartAdjustMap {
+			if smartDuration == 0 {
+				continue
+			}
+			existingChange := m.editMap[hashStr]
+			var change gitops.ForgeChange
+			if existingChange != nil {
+				change = *existingChange
+			} else {
+				for i := range m.commits {
+					if m.commits[i].Hash.String() == hashStr {
+						change = gitops.ForgeChange{OriginalHash: m.commits[i].Hash}
+						break
+					}
+				}
+			}
+
+			baseDate := change.NewDate
+			if baseDate == nil {
+				for i := range m.commits {
+					if m.commits[i].Hash.String() == hashStr {
+						baseDate = &m.commits[i].AuthorDate
+						break
+					}
+				}
+			}
+			if baseDate != nil {
+				newDate := baseDate.Add(smartDuration)
+				change.NewDate = &newDate
+			}
+
+			if existingChange != nil {
+				for i, c := range m.editQueue {
+					if c.OriginalHash.String() == hashStr {
+						m.editQueue[i] = change
+						break
+					}
+				}
+			} else {
+				m.editQueue = append(m.editQueue, change)
+			}
+		}
+
+		m.editMap = make(map[string]*gitops.ForgeChange)
+		for i := range m.editQueue {
+			m.editMap[m.editQueue[i].OriginalHash.String()] = &m.editQueue[i]
+		}
 	}
 
 	if hasTimeSpread {
@@ -1869,6 +1939,7 @@ func (m Model) renderListFooter(selectedCount int) string {
 	actions = append(actions,
 		footerAction{key: "B", label: "switch"},
 		footerAction{key: "s", label: "settings"},
+		footerAction{key: "r", label: "refresh"},
 		footerAction{key: "R", label: "restore"},
 		footerAction{key: "a", label: "apply"},
 		footerAction{key: "q", label: "quit"},
@@ -1909,6 +1980,7 @@ func (m Model) renderBatchEditView() string {
 		"Time Adjust",
 		"Message",
 		"Time Spread",
+		"Smart Adjust",
 	}
 	placeholders := []string{
 		"(empty = keep original)",
@@ -1916,6 +1988,7 @@ func (m Model) renderBatchEditView() string {
 		"e.g., -2h, +1d, -30m",
 		"(empty = keep original)",
 		"e.g., +1h, -30m (weighted)",
+		"e.g., +10h (size/type weighted)",
 	}
 
 	for i, input := range m.batchFields {
@@ -2455,6 +2528,16 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
+
+	if original.IsUnpushed {
+		hashStyle = hashStyle.Bold(true)
+		nameStyle = nameStyle.Bold(true)
+		dateStyle = dateStyle.Bold(true)
+		addStyle = addStyle.Bold(true)
+		delStyle = delStyle.Bold(true)
+		msgStyle = msgStyle.Bold(true)
+	}
+
 	if highlight {
 		hashStyle = hashStyle.Background(bg)
 		nameStyle = nameStyle.Background(bg)
@@ -2507,6 +2590,14 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	sepStyle := lipgloss.NewStyle()
+
+	if original.IsUnpushed {
+		hashStyle = hashStyle.Bold(true)
+		nameStyle = nameStyle.Bold(true)
+		addStyle = addStyle.Bold(true)
+		delStyle = delStyle.Bold(true)
+		textStyle = textStyle.Bold(true)
+	}
 
 	if highlight {
 		hashStyle = hashStyle.Background(bg)
@@ -2570,6 +2661,15 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	delStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	msgStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	sepStyle := lipgloss.NewStyle()
+
+	if original.IsUnpushed {
+		hashStyle = hashStyle.Bold(true)
+		nameStyle = nameStyle.Bold(true)
+		dateStyle = dateStyle.Bold(true)
+		addStyle = addStyle.Bold(true)
+		delStyle = delStyle.Bold(true)
+		msgStyle = msgStyle.Bold(true)
+	}
 
 	if highlight {
 		hashStyle = hashStyle.Background(bg)

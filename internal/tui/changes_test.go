@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -737,5 +738,84 @@ func TestRenderCommitSuffixShowsEditedTimeAndMessage(t *testing.T) {
 	}
 	if width != len(" [time] [msg]") {
 		t.Fatalf("width = %d, want %d", width, len(" [time] [msg]"))
+	}
+}
+
+func TestHandleListKeyRefreshClearsState(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, args := range [][]string{
+		{"init"},
+		{"config", "user.email", "test@test.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "first"},
+		{"commit", "--allow-empty", "-m", "second"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	repo, err := gitops.Open(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+
+	m := NewModel(repo)
+	if len(m.commits) != 2 {
+		t.Fatalf("commits = %d, want 2", len(m.commits))
+	}
+
+	// Add some pending edits
+	hash := m.commits[0].Hash.String()
+	m.editQueue = []gitops.ForgeChange{{OriginalHash: m.commits[0].Hash, NewMessage: "edited"}}
+	m.editMap = map[string]*gitops.ForgeChange{hash: &m.editQueue[0]}
+	m.undoStack = [][]gitops.ForgeChange{{{OriginalHash: m.commits[0].Hash}}}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	m = updated.(Model)
+
+	if len(m.editQueue) != 0 {
+		t.Fatalf("editQueue len after refresh = %d, want 0", len(m.editQueue))
+	}
+	if len(m.editMap) != 0 {
+		t.Fatalf("editMap len after refresh = %d, want 0", len(m.editMap))
+	}
+	if m.undoStack != nil {
+		t.Fatalf("undoStack after refresh = %v, want nil", m.undoStack)
+	}
+	if len(m.list.Items()) != 2 {
+		t.Fatalf("list items after refresh = %d, want 2", len(m.list.Items()))
+	}
+}
+
+func TestHandleListKeyResetRemovesChange(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	commits := []gitops.CommitInfo{{Hash: hash}}
+	items := make([]list.Item, 1)
+	items[0] = commitItem{commit: commits[0]}
+
+	m := Model{
+		commits: commits,
+		list:    list.New(items, commitDelegate{}, 80, 20),
+		keys:    defaultKeyMap(),
+		options: Options{PlainView: true},
+	}
+
+	m.setChange(gitops.ForgeChange{OriginalHash: hash})
+	if len(m.editQueue) != 1 {
+		t.Fatalf("editQueue len before reset = %d, want 1", len(m.editQueue))
+	}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'R'}})
+	m = updated.(Model)
+
+	if len(m.editQueue) != 0 {
+		t.Fatalf("editQueue len after reset = %d, want 0", len(m.editQueue))
+	}
+	if _, ok := m.editMap[hash.String()]; ok {
+		t.Fatalf("editMap still contains removed hash")
 	}
 }

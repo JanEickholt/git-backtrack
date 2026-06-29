@@ -47,7 +47,18 @@ func (r *Repository) ListAllCommits() ([]CommitInfo, error) {
 }
 
 func (r *Repository) ListCommitsFromRef(refName string) ([]CommitInfo, error) {
-	return r.listCommitInfoFromGit(refName)
+	commits, err := r.listCommitInfoFromGit(refName)
+	if err != nil {
+		return nil, err
+	}
+
+	branchName := ""
+	if strings.HasPrefix(refName, "refs/heads/") {
+		branchName = strings.TrimPrefix(refName, "refs/heads/")
+	}
+	r.markUnpushedCommits(commits, branchName)
+
+	return commits, nil
 }
 
 func (r *Repository) ListAllCommitsWithGraph() ([]CommitInfo, *Graph, error) {
@@ -59,14 +70,18 @@ func (r *Repository) ListCommitsFromRefWithGraph(refName string) ([]CommitInfo, 
 }
 
 func (r *Repository) ListAllCommitsWithGraphOrder(order GraphOrder) ([]CommitInfo, *Graph, error) {
-	return r.listCommitsWithGraph(order, "--exclude=refs/backtrack-backup/*", "--all")
+	return r.listCommitsWithGraph(order, "", "--exclude=refs/backtrack-backup/*", "--all")
 }
 
 func (r *Repository) ListCommitsFromRefWithGraphOrder(refName string, order GraphOrder) ([]CommitInfo, *Graph, error) {
-	return r.listCommitsWithGraph(order, refName)
+	branchName := ""
+	if strings.HasPrefix(refName, "refs/heads/") {
+		branchName = strings.TrimPrefix(refName, "refs/heads/")
+	}
+	return r.listCommitsWithGraph(order, branchName, refName)
 }
 
-func (r *Repository) listCommitsWithGraph(order GraphOrder, refArgs ...string) ([]CommitInfo, *Graph, error) {
+func (r *Repository) listCommitsWithGraph(order GraphOrder, branchName string, refArgs ...string) ([]CommitInfo, *Graph, error) {
 	if err := r.Reload(); err != nil {
 		return nil, nil, err
 	}
@@ -108,6 +123,10 @@ func (r *Repository) listCommitsWithGraph(order GraphOrder, refArgs ...string) (
 		commits = append(commits, commit)
 	}
 	graph.AttachCommitIndexes(commits)
+
+	if branchName != "" {
+		r.markUnpushedCommits(commits, branchName)
+	}
 
 	return commits, graph, nil
 }
@@ -301,6 +320,34 @@ func commitInfo(commit *object.Commit) CommitInfo {
 		Additions:   additions,
 		Deletions:   deletions,
 	}
+}
+
+func (r *Repository) markUnpushedCommits(commits []CommitInfo, branchName string) error {
+	if branchName == "" {
+		return nil
+	}
+	upstream, err := r.gitOutput("rev-parse", "--abbrev-ref", branchName+"@{upstream}")
+	upstream = strings.TrimSpace(upstream)
+	if err != nil || upstream == "" {
+		return nil
+	}
+	output, err := r.gitOutput("rev-list", "--no-color", "refs/heads/"+branchName, "--not", upstream)
+	if err != nil {
+		return nil
+	}
+	unpushed := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if line == "" {
+			continue
+		}
+		unpushed[line] = true
+	}
+	for i := range commits {
+		if unpushed[commits[i].Hash.String()] {
+			commits[i].IsUnpushed = true
+		}
+	}
+	return nil
 }
 
 func (r *Repository) GetRepository() *git.Repository {
