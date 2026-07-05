@@ -52,6 +52,8 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 	for _, change := range changes {
 		changeMap[change.OriginalHash] = change
 	}
+	signingConfig, _ := hr.repo.GetSigningConfig()
+	useSigning := signingConfig != nil && signingConfig.SignCommits
 	combineGroups, combineMembers, err := buildCombineGroups(changes, commits)
 	if err != nil {
 		return nil, err
@@ -101,7 +103,7 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 
 		change, hasChange := changeMap[commit.Hash]
 		if group, ok := combineGroups[commit.Hash]; ok {
-			if err := hr.replayCombinedCommit(tmpDir, group, commitByHash, change, hasChange); err != nil {
+			if err := hr.replayCombinedCommit(tmpDir, group, commitByHash, change, hasChange, useSigning); err != nil {
 				return nil, err
 			}
 
@@ -110,6 +112,13 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 				return nil, err
 			}
 			currentHash = plumbing.NewHash(strings.TrimSpace(newHashStr))
+			if useSigning {
+				signedHash, err := hr.signReplayCommit(tmpDir, currentHash)
+				if err != nil {
+					return nil, err
+				}
+				currentHash = signedHash
+			}
 			for _, hash := range group.Hashes {
 				result.ChangedRefs[hash] = currentHash
 			}
@@ -131,7 +140,7 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 		}
 
 		env := replayCommitEnv(commit, change, hasChange)
-		if err := hr.runGitEnv(tmpDir, env, "commit", "--allow-empty", "-F", messageFile); err != nil {
+		if err := hr.runGitEnv(tmpDir, env, replayCommitArgs(change, hasChange, messageFile, useSigning)...); err != nil {
 			return nil, fmt.Errorf("failed to create replayed commit %s: %w", commit.Hash.String()[:7], err)
 		}
 
@@ -140,6 +149,13 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 			return nil, err
 		}
 		currentHash = plumbing.NewHash(strings.TrimSpace(newHashStr))
+		if useSigning {
+			signedHash, err := hr.signReplayCommit(tmpDir, currentHash)
+			if err != nil {
+				return nil, err
+			}
+			currentHash = signedHash
+		}
 		result.ChangedRefs[commit.Hash] = currentHash
 	}
 
@@ -219,7 +235,7 @@ func buildCombineGroups(changes []ForgeChange, commits []*object.Commit) (map[pl
 	return groups, members, nil
 }
 
-func (hr *HistoryRewriter) replayCombinedCommit(dir string, group combineGroup, commitByHash map[plumbing.Hash]*object.Commit, change ForgeChange, hasChange bool) error {
+func (hr *HistoryRewriter) replayCombinedCommit(dir string, group combineGroup, commitByHash map[plumbing.Hash]*object.Commit, change ForgeChange, hasChange bool, useSigning bool) error {
 	groupCommits := make([]*object.Commit, 0, len(group.Hashes))
 	for _, hash := range group.Hashes {
 		commit := commitByHash[hash]
@@ -241,10 +257,25 @@ func (hr *HistoryRewriter) replayCombinedCommit(dir string, group combineGroup, 
 		return err
 	}
 	env := replayCommitEnv(anchorCommit, change, hasChange)
-	if err := hr.runGitEnv(dir, env, "commit", "--allow-empty", "-F", messageFile); err != nil {
+	if err := hr.runGitEnv(dir, env, replayCommitArgs(change, hasChange, messageFile, useSigning)...); err != nil {
 		return fmt.Errorf("failed to create combined commit %s: %w", group.Leader.String()[:7], err)
 	}
 	return nil
+}
+
+func (hr *HistoryRewriter) signReplayCommit(dir string, commitHash plumbing.Hash) (plumbing.Hash, error) {
+	commit, err := hr.repo.repo.CommitObject(commitHash)
+	if err != nil {
+		return commitHash, err
+	}
+	signedHash, err := hr.repo.SignCommitForAuthor(commitHash, commit.Author.Email)
+	if err != nil || signedHash == commitHash {
+		return signedHash, err
+	}
+	if err := hr.runGit(dir, "update-ref", "HEAD", signedHash.String(), commitHash.String()); err != nil {
+		return commitHash, err
+	}
+	return signedHash, nil
 }
 
 func replayCommitEnv(commit *object.Commit, change ForgeChange, hasChange bool) []string {
@@ -270,6 +301,14 @@ func replayCommitEnv(commit *object.Commit, change ForgeChange, hasChange bool) 
 		"GIT_COMMITTER_EMAIL="+committer.Email,
 		"GIT_COMMITTER_DATE="+committer.When.Format(time.RFC3339),
 	)
+}
+
+func replayCommitArgs(change ForgeChange, hasChange bool, messageFile string, noGPGSign bool) []string {
+	args := []string{"commit", "--allow-empty", "-F", messageFile}
+	if noGPGSign || (hasChange && change.NewAuthor != nil) {
+		args = append(args, "--no-gpg-sign")
+	}
+	return args
 }
 
 func (hr *HistoryRewriter) writeReplayMessage(dir string, commit *object.Commit, change ForgeChange, hasChange bool) (string, error) {

@@ -437,6 +437,12 @@ func (r *Repository) GetSigningConfigForEmail(email string) (*SigningConfig, err
 	if err != nil {
 		return nil, err
 	}
+	// Don't leak the default user.signingkey to a different identity.
+	// Per-email signing must use an explicitly configured per-email key.
+	cfg.SigningKey = ""
+	cfg.PrivateKey = ""
+	cfg.KeyType = ""
+
 	mailCfg, err := r.GetMailAuthConfig(email)
 	if err != nil {
 		return nil, err
@@ -476,7 +482,13 @@ func (r *Repository) SignCommit(commitHash plumbing.Hash) (plumbing.Hash, error)
 
 func (r *Repository) SignCommitForEmail(commitHash plumbing.Hash, email string) (plumbing.Hash, error) {
 	signingConfig, err := r.GetSigningConfigForEmail(email)
-	if err != nil || !signingConfig.SignCommits {
+	if err != nil {
+		return commitHash, err
+	}
+	if !signingConfig.SignCommits {
+		return commitHash, nil
+	}
+	if signingConfig.SigningKey == "" && signingConfig.PrivateKey == "" {
 		return commitHash, nil
 	}
 
@@ -488,6 +500,16 @@ func (r *Repository) SignCommitForEmail(commitHash plumbing.Hash, email string) 
 	default:
 		return commitHash, fmt.Errorf("unsupported signing key type: %s", signingConfig.KeyType)
 	}
+}
+
+func (r *Repository) SignCommitForAuthor(commitHash plumbing.Hash, authorEmail string) (plumbing.Hash, error) {
+	if normalizeMail(authorEmail) != "" {
+		identity, err := r.GetUserIdentity()
+		if err != nil || normalizeMail(identity.Email) != normalizeMail(authorEmail) {
+			return r.SignCommitForEmail(commitHash, authorEmail)
+		}
+	}
+	return r.SignCommit(commitHash)
 }
 
 func (r *Repository) signCommitGPG(commitHash plumbing.Hash, signingConfig *SigningConfig) (plumbing.Hash, error) {

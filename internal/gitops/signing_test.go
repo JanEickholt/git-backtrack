@@ -124,8 +124,8 @@ func TestSigningConfigForEmailUsesPerEmailGPGPrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get bob signing config: %v", err)
 	}
-	if !bob.SignCommits || bob.SigningKey != "DEFAULT" || bob.KeyType != "gpg" {
-		t.Fatalf("bob signing config = %+v", bob)
+	if !bob.SignCommits || bob.SigningKey != "" || bob.PrivateKey != "" || bob.KeyType != "" {
+		t.Fatalf("bob signing config = %+v, want no per-email key (no default fallback)", bob)
 	}
 }
 
@@ -236,8 +236,8 @@ func TestSigningConfigForEmailUsesPerEmailSSHKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get bob signing config: %v", err)
 	}
-	if !bob.SignCommits || bob.SigningKey != "DEFAULT" || bob.KeyType != "gpg" {
-		t.Fatalf("bob signing config = %+v", bob)
+	if !bob.SignCommits || bob.SigningKey != "" || bob.PrivateKey != "" || bob.KeyType != "" {
+		t.Fatalf("bob signing config = %+v, want no per-email key (no default fallback)", bob)
 	}
 }
 

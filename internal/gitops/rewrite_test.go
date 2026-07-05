@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-git/go-git/v5/plumbing"
 )
@@ -98,6 +99,71 @@ func TestApplyChangesDropRejectsRootCommit(t *testing.T) {
 	}})
 	if err == nil || !strings.Contains(err.Error(), "root commit") {
 		t.Fatalf("expected root commit error, got %v", err)
+	}
+}
+
+func TestApplyChangesDateEditForOtherAuthorDoesNotUseDefaultSigningKey(t *testing.T) {
+	dir := initGitRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+
+	commitFileAt(t, dir, "file.txt", "content\n", "other author", "2024-01-01T00:00:00Z")
+	targetHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	gitOutput(t, dir, "config", "user.email", "me@example.com")
+	gitOutput(t, dir, "config", "user.signingkey", "DEFAULT")
+	gitOutput(t, dir, "config", "commit.gpgsign", "true")
+
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	newDate := mustParseTime(t, "2024-02-03T04:05:06Z")
+	result, err := NewHistoryRewriter(repo).ApplyChanges([]ForgeChange{{
+		OriginalHash: plumbing.NewHash(targetHash),
+		Operation:    ForgeEdit,
+		NewDate:      &newDate,
+	}})
+	if err != nil {
+		t.Fatalf("apply changes: %v", err)
+	}
+	newHash := result.ChangedRefs[plumbing.NewHash(targetHash)]
+	if newHash == plumbing.ZeroHash {
+		t.Fatalf("missing changed ref for edited commit")
+	}
+	date := strings.TrimSpace(gitOutput(t, dir, "log", "-1", "--format=%aI", newHash.String()))
+	if date != "2024-02-03T04:05:06Z" {
+		t.Fatalf("author date = %q", date)
+	}
+	if sig := strings.TrimSpace(gitOutput(t, dir, "log", "-1", "--format=%G?", newHash.String())); sig != "N" {
+		t.Fatalf("signature status = %q, want unsigned", sig)
+	}
+}
+
+func TestApplyChangesDropReplaysOtherAuthorWithoutDefaultSigningKey(t *testing.T) {
+	dir := initGitRepo(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+
+	commitFile(t, dir, "base.txt", "base\n", "base")
+	commitFile(t, dir, "drop.txt", "drop\n", "drop")
+	dropHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	commitFile(t, dir, "keep.txt", "keep\n", "keep")
+	gitOutput(t, dir, "config", "user.email", "me@example.com")
+	gitOutput(t, dir, "config", "user.signingkey", "DEFAULT")
+	gitOutput(t, dir, "config", "commit.gpgsign", "true")
+
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	if _, err := NewHistoryRewriter(repo).ApplyChanges([]ForgeChange{{
+		OriginalHash: plumbing.NewHash(dropHash),
+		Operation:    ForgeDrop,
+	}}); err != nil {
+		t.Fatalf("apply changes: %v", err)
+	}
+	if log := gitOutput(t, dir, "log", "--format=%s"); strings.Contains(log, "drop") || !strings.Contains(log, "keep") {
+		t.Fatalf("unexpected log after drop:\n%s", log)
 	}
 }
 
@@ -194,6 +260,15 @@ func commitFileAt(t *testing.T, dir, name, content, message, date string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %s: %v", strings.TrimSpace(string(output)), err)
 	}
+}
+
+func mustParseTime(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		t.Fatalf("parse time: %v", err)
+	}
+	return parsed
 }
 
 func gitOutput(t *testing.T, dir string, args ...string) string {
