@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/Jan/git-backtrack/internal/gitops"
 )
@@ -114,6 +115,15 @@ type authorHistoryLoadedMsg struct {
 	commits []gitops.CommitInfo
 }
 
+type lineStatsBatchLoadedMsg struct {
+	branch string
+	next   int
+	stats  map[string]gitops.CommitStats
+	err    error
+}
+
+const lineStatsBatchSize = 50
+
 func (o Options) disablesGraph() bool {
 	return o.CleanView || o.PlainView
 }
@@ -139,14 +149,14 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 	var err error
 	if currentBranch != "" {
 		if options.disablesGraph() {
-			commits, err = repo.ListCommitsFromRefWithStats("refs/heads/"+currentBranch, options.showsLineDiffs())
+			commits, err = repo.ListCommitsFromRefWithStats("refs/heads/"+currentBranch, false)
 		} else {
-			commits, graph, err = repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+currentBranch, options.GraphOrder, options.showsLineDiffs())
+			commits, graph, err = repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+currentBranch, options.GraphOrder, false)
 		}
 	} else if options.disablesGraph() {
-		commits, err = repo.ListAllCommitsWithStats(options.showsLineDiffs())
+		commits, err = repo.ListAllCommitsWithStats(false)
 	} else {
-		commits, graph, err = repo.ListAllCommitsWithGraphOrderAndStats(options.GraphOrder, options.showsLineDiffs())
+		commits, graph, err = repo.ListAllCommitsWithGraphOrderAndStats(options.GraphOrder, false)
 	}
 	if graph == nil {
 		graph = &gitops.Graph{}
@@ -214,7 +224,7 @@ func loadAuthorHistory(repo *gitops.Repository, currentBranch string, fallback [
 }
 
 func (m Model) Init() tea.Cmd {
-	return loadAuthorHistoryCmd(m.repo, m.currentBranch, m.authorHistory)
+	return tea.Batch(loadAuthorHistoryCmd(m.repo, m.currentBranch, m.authorHistory), loadLineStatsBatchCmd(m.repo, m.currentBranch, m.commits, m.firstUnloadedLineDiffIndex()))
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -231,6 +241,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.authorHistory = msg.commits
 		}
 		return m, nil
+
+	case lineStatsBatchLoadedMsg:
+		if msg.branch != m.currentBranch || !m.options.showsLineDiffs() {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.revertStatus = fmt.Sprintf("Line diff stats failed: %v", msg.err)
+			return m, nil
+		}
+		m.applyLineStats(msg.stats)
+		return m, loadLineStatsBatchCmd(m.repo, m.currentBranch, m.commits, msg.next)
 
 	case tea.KeyMsg:
 		switch m.state {
@@ -271,6 +292,34 @@ func loadAuthorHistoryCmd(repo *gitops.Repository, currentBranch string, fallbac
 	}
 	return func() tea.Msg {
 		return authorHistoryLoadedMsg{branch: currentBranch, commits: loadAuthorHistory(repo, currentBranch, fallback)}
+	}
+}
+
+func loadLineStatsBatchCmd(repo *gitops.Repository, currentBranch string, commits []gitops.CommitInfo, start int) tea.Cmd {
+	if start < 0 || start >= len(commits) {
+		return nil
+	}
+	end := start + lineStatsBatchSize
+	if end > len(commits) {
+		end = len(commits)
+	}
+	hashes := make([]plumbing.Hash, 0, end-start)
+	for _, commit := range commits[start:end] {
+		if commit.StatsLoaded {
+			continue
+		}
+		hashes = append(hashes, commit.Hash)
+	}
+	if len(hashes) == 0 {
+		return loadLineStatsBatchCmd(repo, currentBranch, commits, end)
+	}
+	return func() tea.Msg {
+		stats, err := repo.LoadCommitStats(hashes)
+		byHash := make(map[string]gitops.CommitStats, len(stats))
+		for hash, stat := range stats {
+			byHash[hash.String()] = stat
+		}
+		return lineStatsBatchLoadedMsg{branch: currentBranch, next: end, stats: byHash, err: err}
 	}
 }
 
@@ -421,8 +470,7 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case key.Matches(msg, m.keys.Refresh):
-		m.refresh()
-		return m, nil
+		return m, m.refresh()
 
 	case key.Matches(msg, m.keys.Apply):
 		if len(m.editQueue) == 0 {
@@ -837,7 +885,9 @@ func (m Model) handleBranchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.editMap = make(map[string]*gitops.ForgeChange)
 				m.undoStack = nil
 				m.selectedCommits = make(map[string]bool)
-				m.refresh()
+				cmd := m.refresh()
+				m.state = ViewList
+				return m, cmd
 			}
 		}
 		m.state = ViewList
@@ -869,14 +919,14 @@ func (m Model) handleSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = ViewAuthSettings
 			return m, nil
 		}
-		m.toggleSetting(SettingItem(m.settingsIndex))
+		cmd := m.toggleSetting(SettingItem(m.settingsIndex))
 		m.updateListScrollOffset(m.visibleListRows())
-		return m, nil
+		return m, cmd
 	}
 	return m, nil
 }
 
-func (m *Model) toggleSetting(item SettingItem) {
+func (m *Model) toggleSetting(item SettingItem) tea.Cmd {
 	switch item {
 	case SettingOverviewMode:
 		m.cycleOverviewMode()
@@ -888,10 +938,9 @@ func (m *Model) toggleSetting(item SettingItem) {
 		m.options.ShowEmail = !m.options.ShowEmail
 	case SettingLineDiffs:
 		m.options.HideLineDiffs = !m.options.HideLineDiffs
-		if m.options.showsLineDiffs() && !m.lineDiffsLoaded() {
-			m.refresh()
-		}
+		return loadLineStatsBatchCmd(m.repo, m.currentBranch, m.commits, m.firstUnloadedLineDiffIndex())
 	}
+	return nil
 }
 
 func (m *Model) initAuthFields() {
@@ -1116,9 +1165,9 @@ func (m *Model) ensureGraphLoaded() error {
 	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
-		commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+m.currentBranch, m.options.GraphOrder, m.options.showsLineDiffs())
+		commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+m.currentBranch, m.options.GraphOrder, false)
 	} else {
-		commits, graph, err = m.repo.ListAllCommitsWithGraphOrderAndStats(m.options.GraphOrder, m.options.showsLineDiffs())
+		commits, graph, err = m.repo.ListAllCommitsWithGraphOrderAndStats(m.options.GraphOrder, false)
 	}
 	if err != nil {
 		return err
@@ -1543,7 +1592,9 @@ func (m Model) handleConfirmKey(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pushIndex = 0
 				m.pushStatus = ""
 				m.revertStatus = ""
-				m.refresh()
+				cmd := m.refresh()
+				m.state = ViewResult
+				return m, cmd
 			}
 			m.state = ViewResult
 			return m, nil
@@ -1627,7 +1678,9 @@ func (m Model) handleBackupRestoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.revertStatus = fmt.Sprintf("Restore failed: %v", err)
 		} else {
 			m.revertStatus = "Restored " + backup
-			m.refresh()
+			cmd := m.refresh()
+			m.state = ViewList
+			return m, cmd
 		}
 		m.state = ViewList
 		return m, nil
@@ -1635,23 +1688,23 @@ func (m Model) handleBackupRestoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) refresh() {
+func (m *Model) refresh() tea.Cmd {
 	var commits []gitops.CommitInfo
 	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
 		if m.options.disablesGraph() {
-			commits, err = m.repo.ListCommitsFromRefWithStats("refs/heads/"+m.currentBranch, m.options.showsLineDiffs())
+			commits, err = m.repo.ListCommitsFromRefWithStats("refs/heads/"+m.currentBranch, false)
 		} else {
-			commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+m.currentBranch, m.options.GraphOrder, m.options.showsLineDiffs())
+			commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+m.currentBranch, m.options.GraphOrder, false)
 		}
 	} else if m.options.disablesGraph() {
-		commits, err = m.repo.ListAllCommitsWithStats(m.options.showsLineDiffs())
+		commits, err = m.repo.ListAllCommitsWithStats(false)
 	} else {
-		commits, graph, err = m.repo.ListAllCommitsWithGraphOrderAndStats(m.options.GraphOrder, m.options.showsLineDiffs())
+		commits, graph, err = m.repo.ListAllCommitsWithGraphOrderAndStats(m.options.GraphOrder, false)
 	}
 	if err != nil {
-		return
+		return nil
 	}
 	if graph == nil {
 		graph = &gitops.Graph{}
@@ -1663,6 +1716,7 @@ func (m *Model) refresh() {
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	m.undoStack = nil
 	m.list.SetItems(commitListItems(commits))
+	return tea.Batch(loadAuthorHistoryCmd(m.repo, m.currentBranch, commits), loadLineStatsBatchCmd(m.repo, m.currentBranch, m.commits, m.firstUnloadedLineDiffIndex()))
 }
 
 func (m Model) lineDiffsLoaded() bool {
@@ -1672,6 +1726,34 @@ func (m Model) lineDiffsLoaded() bool {
 		}
 	}
 	return true
+}
+
+func (m Model) firstUnloadedLineDiffIndex() int {
+	if !m.options.showsLineDiffs() {
+		return -1
+	}
+	for i, commit := range m.commits {
+		if !commit.StatsLoaded {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *Model) applyLineStats(stats map[string]gitops.CommitStats) {
+	if len(stats) == 0 {
+		return
+	}
+	for i := range m.commits {
+		stat, ok := stats[m.commits[i].Hash.String()]
+		if !ok {
+			continue
+		}
+		m.commits[i].Additions = stat.Additions
+		m.commits[i].Deletions = stat.Deletions
+		m.commits[i].StatsLoaded = true
+	}
+	m.list.SetItems(commitListItems(m.commits))
 }
 
 func commitListItems(commits []gitops.CommitInfo) []list.Item {
@@ -2603,8 +2685,8 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 		sepStyle = sepStyle.Background(bg)
 	}
 
-	addStr := fmt.Sprintf("+%d", original.Additions)
-	delStr := fmt.Sprintf("-%d", original.Deletions)
+	addStr := gitops.FormatCommitStatInfo("+", original.Additions, original.HasStats(), 0)
+	delStr := gitops.FormatCommitStatInfo("-", original.Deletions, original.HasStats(), 0)
 	staticWidth := len(original.ShortHash) + 1 + len(name) + 1 + len(date) + 1
 	if showLineDiffs {
 		statsWidth := len(addStr) + 1 + len(delStr)
@@ -2670,8 +2752,8 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 		sepStyle = sepStyle.Background(bg)
 	}
 
-	addStr := gitops.FormatCommitStat("+", original.Additions, statWidth)
-	delStr := gitops.FormatCommitStat("-", original.Deletions, statWidth)
+	addStr := gitops.FormatCommitStatInfo("+", original.Additions, original.HasStats(), statWidth)
+	delStr := gitops.FormatCommitStatInfo("-", original.Deletions, original.HasStats(), statWidth)
 	staticWidth := len(original.ShortHash) + 2 + authorWidth + 2 + len(date) + 2
 	if showLineDiffs {
 		staticWidth += statWidth + 1 + statWidth + 2
@@ -2754,8 +2836,8 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	hashPart := hashStyle.Render(original.ShortHash)
 	namePart := nameStyle.Render(gitops.FormatCommitAuthor(name, authorWidth))
 	datePart := dateStyle.Render(date)
-	addPart := addStyle.Render(gitops.FormatCommitStat("+", original.Additions, statWidth))
-	delPart := delStyle.Render(gitops.FormatCommitStat("-", original.Deletions, statWidth))
+	addPart := addStyle.Render(gitops.FormatCommitStatInfo("+", original.Additions, original.HasStats(), statWidth))
+	delPart := delStyle.Render(gitops.FormatCommitStatInfo("-", original.Deletions, original.HasStats(), statWidth))
 
 	staticWidth := len(original.ShortHash) + 2 + authorWidth + 2 + len(date) + 2
 	if showLineDiffs {
@@ -2829,12 +2911,12 @@ func (d commitDelegate) Render(w io.Writer, m list.Model, index int, item list.I
 		return
 	}
 
-	line := fmt.Sprintf("%s  %s  %s  +%d -%d  %s",
+	line := fmt.Sprintf("%s  %s  %s  %s %s  %s",
 		i.commit.ShortHash,
 		i.commit.AuthorName,
 		formatCommitTime(i.commit.AuthorDate, false),
-		i.commit.Additions,
-		i.commit.Deletions,
+		gitops.FormatCommitStatInfo("+", i.commit.Additions, i.commit.HasStats(), 0),
+		gitops.FormatCommitStatInfo("-", i.commit.Deletions, i.commit.HasStats(), 0),
 		strings.Split(i.commit.Message, "\n")[0],
 	)
 

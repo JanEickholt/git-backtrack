@@ -235,8 +235,8 @@ func renderCommitInfoWithSuffix(commit *CommitInfo, width int, highlight bool, s
 	}
 
 	authorStr := FormatCommitAuthor(FormatCommitAuthorIdentity(commit.AuthorName, commit.AuthorEmail, showEmail), authorWidth)
-	addStr := FormatCommitStat("+", commit.Additions, statWidth)
-	delStr := FormatCommitStat("-", commit.Deletions, statWidth)
+	addStr := FormatCommitStatInfo("+", commit.Additions, commit.HasStats(), statWidth)
+	delStr := FormatCommitStatInfo("-", commit.Deletions, commit.HasStats(), statWidth)
 
 	staticWidth := len(commit.ShortHash) + 2 + authorWidth + 2 + len(dateStr) + 2
 	if showLineDiffs {
@@ -295,8 +295,8 @@ func AuthorColumnWidthWithEmail(commits []CommitInfo, showEmail bool) int {
 func StatColumnWidth(commits []CommitInfo) int {
 	width := 0
 	for _, commit := range commits {
-		width = max(width, len(formatCommitStat("+", commit.Additions)))
-		width = max(width, len(formatCommitStat("-", commit.Deletions)))
+		width = max(width, len(formatCommitStatInfo("+", commit.Additions, commit.HasStats())))
+		width = max(width, len(formatCommitStatInfo("-", commit.Deletions, commit.HasStats())))
 	}
 	return width
 }
@@ -316,8 +316,19 @@ func FormatCommitStat(prefix string, value int, width int) string {
 	return fmt.Sprintf("%*s", width, formatCommitStat(prefix, value))
 }
 
+func FormatCommitStatInfo(prefix string, value int, loaded bool, width int) string {
+	return fmt.Sprintf("%*s", width, formatCommitStatInfo(prefix, value, loaded))
+}
+
 func formatCommitStat(prefix string, value int) string {
 	return fmt.Sprintf("%s%d", prefix, value)
+}
+
+func formatCommitStatInfo(prefix string, value int, loaded bool) string {
+	if !loaded {
+		return prefix + "?"
+	}
+	return formatCommitStat(prefix, value)
 }
 
 func padRight(value string, width int) string {

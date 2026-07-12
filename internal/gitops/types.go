@@ -20,6 +20,15 @@ type CommitInfo struct {
 	IsUnpushed  bool
 }
 
+type CommitStats struct {
+	Additions int
+	Deletions int
+}
+
+func (c CommitInfo) HasStats() bool {
+	return c.StatsLoaded || c.Additions != 0 || c.Deletions != 0
+}
+
 type SigningConfig struct {
 	SignCommits bool
 	SigningKey  string

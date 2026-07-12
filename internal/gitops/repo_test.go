@@ -67,3 +67,22 @@ func TestParseCommitInfoLogCanSkipStats(t *testing.T) {
 		t.Fatal("StatsLoaded = true, want false")
 	}
 }
+
+func TestParseCommitStatsLog(t *testing.T) {
+	output := commitRecordMarker + "1111111111111111111111111111111111111111\x1f\x1f\n" +
+		"3\t1\tfile.go\n" +
+		"-\t-\tbinary.dat\n" +
+		"7\t2\tdir/file.go\n" +
+		commitRecordMarker + "2222222222222222222222222222222222222222\x1f\x1f\n" +
+		"1\t4\tother.go\n"
+
+	stats := parseCommitStatsLog(output)
+	first := plumbing.NewHash("1111111111111111111111111111111111111111")
+	second := plumbing.NewHash("2222222222222222222222222222222222222222")
+	if stats[first].Additions != 10 || stats[first].Deletions != 3 {
+		t.Fatalf("first stats = +%d -%d, want +10 -3", stats[first].Additions, stats[first].Deletions)
+	}
+	if stats[second].Additions != 1 || stats[second].Deletions != 4 {
+		t.Fatalf("second stats = +%d -%d, want +1 -4", stats[second].Additions, stats[second].Deletions)
+	}
+}

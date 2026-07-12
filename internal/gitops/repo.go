@@ -260,6 +260,51 @@ func parseNumstatTotals(value string) (int, int) {
 	return additions, deletions
 }
 
+func (r *Repository) LoadCommitStats(hashes []plumbing.Hash) (map[plumbing.Hash]CommitStats, error) {
+	if len(hashes) == 0 {
+		return map[plumbing.Hash]CommitStats{}, nil
+	}
+
+	args := []string{
+		"log",
+		"--no-color",
+		"--no-walk",
+		"--numstat",
+		"--diff-merges=first-parent",
+		"--format=" + commitRecordMarker + "%H%x1f%x1f",
+	}
+	for _, hash := range hashes {
+		args = append(args, hash.String())
+	}
+	output, err := r.gitOutput(args...)
+	if err != nil {
+		return nil, err
+	}
+	return parseCommitStatsLog(output), nil
+}
+
+func parseCommitStatsLog(output string) map[plumbing.Hash]CommitStats {
+	records := strings.Split(output, commitRecordMarker)
+	stats := make(map[plumbing.Hash]CommitStats, len(records))
+	for _, record := range records {
+		record = strings.TrimLeft(record, "\n")
+		if strings.TrimSpace(record) == "" {
+			continue
+		}
+		fields := strings.SplitN(record, "\x1f", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		hash := plumbing.NewHash(fields[0])
+		if hash.IsZero() {
+			continue
+		}
+		additions, deletions := parseNumstatTotals(fields[2])
+		stats[hash] = CommitStats{Additions: additions, Deletions: deletions}
+	}
+	return stats
+}
+
 func (r *Repository) gitOutput(args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", r.path}, args...)...)
 	cmd.Env = os.Environ()
@@ -345,6 +390,7 @@ func commitInfo(commit *object.Commit) CommitInfo {
 		Parents:     commit.ParentHashes,
 		Additions:   additions,
 		Deletions:   deletions,
+		StatsLoaded: true,
 	}
 }
 
