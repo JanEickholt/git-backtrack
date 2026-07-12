@@ -22,6 +22,30 @@ type Repository struct {
 	path string
 }
 
+type LogFilter struct {
+	Since  string
+	Before string
+	Author string
+	Email  string
+}
+
+func (f LogFilter) GitArgs() []string {
+	args := make([]string, 0, 4)
+	if f.Since != "" {
+		args = append(args, "--since="+f.Since)
+	}
+	if f.Before != "" {
+		args = append(args, "--before="+f.Before)
+	}
+	if f.Author != "" {
+		args = append(args, "--author="+f.Author)
+	}
+	if f.Email != "" {
+		args = append(args, "--author="+f.Email)
+	}
+	return args
+}
+
 func Open(path string) (*Repository, error) {
 	repo, err := git.PlainOpen(path)
 	if err != nil {
@@ -69,12 +93,14 @@ func (r *Repository) ListCommitsFromRefWithStats(refName string, includeStats bo
 	return commits, nil
 }
 
-func (r *Repository) ListCommitsFromRefWindowWithStats(refName string, includeStats bool, limit int, offset int) ([]CommitInfo, error) {
-	if limit <= 0 && offset <= 0 {
+func (r *Repository) ListCommitsFromRefWindowWithStats(refName string, includeStats bool, limit int, offset int, filter LogFilter) ([]CommitInfo, error) {
+	filterArgs := filter.GitArgs()
+	if limit <= 0 && offset <= 0 && len(filterArgs) == 0 {
 		return r.ListCommitsFromRefWithStats(refName, includeStats)
 	}
 
 	args := []string{"--topo-order"}
+	args = append(args, filterArgs...)
 	if offset > 0 {
 		args = append(args, "--skip="+strconv.Itoa(offset))
 	}
@@ -97,11 +123,14 @@ func (r *Repository) ListCommitsFromRefWindowWithStats(refName string, includeSt
 	return commits, nil
 }
 
-func (r *Repository) CountCommitsFromRef(refName string) (int, error) {
+func (r *Repository) CountCommitsFromRef(refName string, filter LogFilter) (int, error) {
 	if err := r.Reload(); err != nil {
 		return 0, err
 	}
-	output, err := r.gitOutput("rev-list", "--count", refName)
+	args := []string{"rev-list", "--count"}
+	args = append(args, filter.GitArgs()...)
+	args = append(args, refName)
+	output, err := r.gitOutput(args...)
 	if err != nil {
 		return 0, err
 	}

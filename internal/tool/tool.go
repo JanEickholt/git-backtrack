@@ -231,9 +231,23 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) int {
 	offset := fs.Int("offset", 0, "number of newest commits to skip before applying --limit (ignored unless > 0)")
 	all := fs.Bool("all", false, "return every reachable commit (overrides --limit)")
 	stats := fs.Bool("stats", false, "include additions/deletions per commit (omitted by default to keep responses small)")
+	date := fs.String("date", "", "only commits on this date (YYYY-MM-DD)")
+	dateRange := fs.String("date-range", "", "only commits in this date range (YYYY-MM-DD..YYYY-MM-DD)")
+	since := fs.String("since", "", "only commits on or after this date/time")
+	after := fs.String("after", "", "alias for --since")
+	until := fs.String("until", "", "only commits on or before this date/time")
+	before := fs.String("before", "", "alias for --until")
+	author := fs.String("author", "", "only commits whose author name/email matches this pattern")
+	email := fs.String("email", "", "only commits whose author email matches this pattern")
+	mail := fs.String("mail", "", "alias for --email")
 	_ = fs.Bool("json", true, "emit JSON")
 	compact := fs.Bool("compact", false, "emit JSON on a single line")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	filter, filterErr := buildListFilter(*date, *dateRange, firstNonEmpty(*since, *after), firstNonEmpty(*until, *before), *author, firstNonEmpty(*email, *mail))
+	if filterErr != nil {
+		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject(filterErr.code, filterErr.message)}}, *compact)
 		return 2
 	}
 	repo, err := gitops.Open(*repoPath)
@@ -246,14 +260,14 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("resolve_ref_failed", err.Error())}}, *compact)
 		return 1
 	}
-	total, err := repo.CountCommitsFromRef(ref)
+	total, err := repo.CountCommitsFromRef(ref, filter)
 	if err != nil {
 		writeJSON(stdout, ListResponse{OK: false, Ref: ref, Head: refHash, Errors: []Error{errorObject("count_commits_failed", err.Error())}}, *compact)
 		return 1
 	}
 
 	effectiveLimit, effectiveOffset, remaining, truncated := listWindow(total, *limit, *offset, *all)
-	commits, err := listCommitsForResponse(repo, ref, *stats, effectiveLimit, effectiveOffset, *all)
+	commits, err := listCommitsForResponse(repo, ref, *stats, effectiveLimit, effectiveOffset, *all, filter)
 	if err != nil {
 		writeJSON(stdout, ListResponse{OK: false, Ref: ref, Head: refHash, Errors: []Error{errorObject("list_commits_failed", err.Error())}}, *compact)
 		return 1
@@ -319,12 +333,95 @@ func listWindow(total int, limit int, offset int, all bool) (effectiveLimit int,
 	return effectiveLimit, effectiveOffset, remaining, truncated
 }
 
-func listCommitsForResponse(repo *gitops.Repository, ref string, includeStats bool, limit int, offset int, all bool) ([]gitops.CommitInfo, error) {
-	if all {
-		commits, _, err := repo.ListCommitsFromRefWithGraphOrderAndStats(ref, gitops.DefaultGraphOrder(), includeStats)
-		return commits, err
+type listFilterError struct {
+	code    string
+	message string
+}
+
+func buildListFilter(date string, dateRange string, since string, until string, author string, email string) (gitops.LogFilter, *listFilterError) {
+	filter := gitops.LogFilter{Author: strings.TrimSpace(author), Email: strings.TrimSpace(email)}
+	if strings.TrimSpace(date) != "" && strings.TrimSpace(dateRange) != "" {
+		return filter, &listFilterError{code: "invalid_date_filter", message: "--date and --date-range cannot be combined"}
 	}
-	return repo.ListCommitsFromRefWindowWithStats(ref, includeStats, limit, offset)
+	if strings.TrimSpace(date) != "" && (strings.TrimSpace(since) != "" || strings.TrimSpace(until) != "") {
+		return filter, &listFilterError{code: "invalid_date_filter", message: "--date cannot be combined with --since/--after/--until/--before"}
+	}
+	if strings.TrimSpace(dateRange) != "" && (strings.TrimSpace(since) != "" || strings.TrimSpace(until) != "") {
+		return filter, &listFilterError{code: "invalid_date_filter", message: "--date-range cannot be combined with --since/--after/--until/--before"}
+	}
+
+	if strings.TrimSpace(date) != "" {
+		start, end, err := dayRange(strings.TrimSpace(date))
+		if err != nil {
+			return filter, &listFilterError{code: "invalid_date", message: err.Error()}
+		}
+		filter.Since = start
+		filter.Before = end
+		return filter, nil
+	}
+	if strings.TrimSpace(dateRange) != "" {
+		start, end, err := parseDateRange(strings.TrimSpace(dateRange))
+		if err != nil {
+			return filter, &listFilterError{code: "invalid_date_range", message: err.Error()}
+		}
+		filter.Since = start
+		filter.Before = end
+		return filter, nil
+	}
+	filter.Since = normalizeSince(strings.TrimSpace(since))
+	filter.Before = normalizeUntil(strings.TrimSpace(until))
+	return filter, nil
+}
+
+func dayRange(value string) (string, string, error) {
+	day, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return "", "", fmt.Errorf("date %q must use YYYY-MM-DD", value)
+	}
+	return day.Format(time.RFC3339), day.AddDate(0, 0, 1).Format(time.RFC3339), nil
+}
+
+func parseDateRange(value string) (string, string, error) {
+	parts := strings.Split(value, "..")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("date range %q must use YYYY-MM-DD..YYYY-MM-DD", value)
+	}
+	start, _, err := dayRange(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return "", "", err
+	}
+	_, end, err := dayRange(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return "", "", err
+	}
+	return start, end, nil
+}
+
+func normalizeSince(value string) string {
+	return value
+}
+
+func normalizeUntil(value string) string {
+	if _, end, err := dayRange(value); err == nil {
+		return end
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func listCommitsForResponse(repo *gitops.Repository, ref string, includeStats bool, limit int, offset int, all bool, filter gitops.LogFilter) ([]gitops.CommitInfo, error) {
+	if all {
+		return repo.ListCommitsFromRefWindowWithStats(ref, includeStats, 0, 0, filter)
+	}
+	return repo.ListCommitsFromRefWindowWithStats(ref, includeStats, limit, offset, filter)
 }
 
 func runValidate(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -477,14 +574,14 @@ func toolHelp() HelpResponse {
 		Name:        "git-backtrack tool mode",
 		Description: "JSON interface for inspecting, validating, and applying git history rewrite plans without driving the TUI.",
 		Workflow: []string{
-			"Run list --json to discover the current ref, expected_head, and commit hashes. The newest 5 commits are returned by default; use --offset to paginate, --stats for additions/deletions, or --all (or --limit 0) when older commits are needed.",
+			"Run list --json to discover the current ref, expected_head, and commit hashes. The newest 5 commits are returned by default; use --offset to paginate, --stats for additions/deletions, --date/--date-range/--author/--email to filter, or --all (or --limit 0) when older commits are needed.",
 			"Create a version 1 plan using hash values from list output or unambiguous hash prefixes.",
 			"Run validate --plan plan.json --json and inspect ok/errors/resolved_operations.",
 			"Run apply --plan plan.json --json --yes only after validation succeeds and the user wants to rewrite history.",
 		},
 		Commands: []CommandHelp{
 			{Name: "help", Usage: "git-backtrack help --json", Description: "Print this machine-readable tool contract.", Flags: []string{"--json", "--compact"}},
-			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main] [--limit N] [--offset N] [--stats] [--all]", Description: "List reachable commits for a ref and return current head metadata. Defaults to the 5 newest commits; pass --offset to skip newer ones, --stats for additions/deletions, or --all / --limit 0 for every reachable commit.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--limit <n>", "--offset <n>", "--stats", "--all", "--json", "--compact"}},
+			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main] [--limit N] [--offset N] [--date YYYY-MM-DD] [--date-range YYYY-MM-DD..YYYY-MM-DD] [--author PATTERN] [--email PATTERN] [--stats] [--all]", Description: "List reachable commits for a ref and return current head metadata. Defaults to the 5 newest commits; pass --offset to skip newer ones, date/author filters to narrow results, --stats for additions/deletions, or --all / --limit 0 for every reachable commit.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--limit <n>", "--offset <n>", "--date <yyyy-mm-dd>", "--date-range <yyyy-mm-dd..yyyy-mm-dd>", "--since <date>", "--after <date>", "--until <date>", "--before <date>", "--author <pattern>", "--email <pattern>", "--mail <pattern>", "--stats", "--all", "--json", "--compact"}},
 			{Name: "validate", Usage: "git-backtrack validate --path . --plan plan.json --json", Description: "Validate a rewrite plan and return normalized resolved operations.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--compact"}},
 			{Name: "apply", Usage: "git-backtrack apply --path . --plan plan.json --json --yes", Description: "Validate then apply a rewrite plan. Requires --yes and creates a backup for real rewrites.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--compact", "--yes"}},
 			{Name: "backups", Usage: "git-backtrack backups --path . --json", Description: "List all backtrack backup refs in the repository.", Flags: []string{"--path <repo>", "--json", "--compact"}},
@@ -537,6 +634,9 @@ func toolHelp() HelpResponse {
 			"hash_not_found",
 			"hash_not_reachable",
 			"invalid_author_date",
+			"invalid_date",
+			"invalid_date_filter",
+			"invalid_date_range",
 			"invalid_hash",
 			"list_backups_failed",
 			"merge_replay_unsupported",

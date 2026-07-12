@@ -64,6 +64,28 @@ func TestRunListAcceptsPositionalLimitBeforeFlags(t *testing.T) {
 	}
 }
 
+func TestRunListFiltersByDateAuthorAndEmail(t *testing.T) {
+	dir := initGitRepo(t)
+	commitFileWithIdentityDate(t, dir, "file.txt", "one\n", "alice january", "Alice", "alice@example.com", "2024-01-05T12:00:00Z")
+	commitFileWithIdentityDate(t, dir, "file.txt", "two\n", "bob february", "Bob", "bob@example.com", "2024-02-10T12:00:00Z")
+	commitFileWithIdentityDate(t, dir, "file.txt", "three\n", "alice february", "Alice", "alice@example.com", "2024-02-11T12:00:00Z")
+
+	dateResponse := runListResponse(t, dir, "--date", "2024-02-10", "--all")
+	if dateResponse.Total != 1 || len(dateResponse.Commits) != 1 || dateResponse.Commits[0].Subject != "bob february" {
+		t.Fatalf("date response = %+v, want bob february", dateResponse)
+	}
+
+	authorResponse := runListResponse(t, dir, "--date-range", "2024-02-01..2024-02-28", "--author", "Alice", "--all")
+	if authorResponse.Total != 1 || len(authorResponse.Commits) != 1 || authorResponse.Commits[0].Subject != "alice february" {
+		t.Fatalf("author range response = %+v, want alice february", authorResponse)
+	}
+
+	emailResponse := runListResponse(t, dir, "--mail", "bob@example.com", "--all")
+	if emailResponse.Total != 1 || len(emailResponse.Commits) != 1 || emailResponse.Commits[0].AuthorEmail != "bob@example.com" {
+		t.Fatalf("email response = %+v, want bob@example.com", emailResponse)
+	}
+}
+
 func TestRunHelpOutputsToolContract(t *testing.T) {
 	var stdout bytes.Buffer
 	status := Run([]string{"help", "--json"}, &stdout, &bytes.Buffer{})
@@ -275,6 +297,24 @@ func gitOutputErr(dir string, args ...string) (string, error) {
 		return string(output), err
 	}
 	return string(output), nil
+}
+
+func runListResponse(t *testing.T, dir string, args ...string) ListResponse {
+	t.Helper()
+	listArgs := append([]string{"list", "--path", dir, "--json"}, args...)
+	var stdout bytes.Buffer
+	status := Run(listArgs, &stdout, &bytes.Buffer{})
+	if status != 0 {
+		t.Fatalf("status = %d, output = %s", status, stdout.String())
+	}
+	var response ListResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !response.OK {
+		t.Fatalf("response not ok: %+v", response)
+	}
+	return response
 }
 
 func stringPtr(value string) *string {
@@ -559,6 +599,27 @@ func commitFileDated(t *testing.T, dir string, name string, content string, mess
 		"GIT_AUTHOR_DATE="+date,
 		"GIT_COMMITTER_NAME=Test User",
 		"GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_COMMITTER_DATE="+date,
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %s: %v", strings.TrimSpace(string(output)), err)
+	}
+}
+
+func commitFileWithIdentityDate(t *testing.T, dir string, name string, content string, message string, authorName string, authorEmail string, date string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	gitOutput(t, dir, "add", name)
+	cmd := exec.Command("git", "-C", dir, "commit", "-m", message)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME="+authorName,
+		"GIT_AUTHOR_EMAIL="+authorEmail,
+		"GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_NAME="+authorName,
+		"GIT_COMMITTER_EMAIL="+authorEmail,
 		"GIT_COMMITTER_DATE="+date,
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
