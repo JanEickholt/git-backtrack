@@ -109,6 +109,11 @@ type Options struct {
 	GraphOrder    gitops.GraphOrder
 }
 
+type authorHistoryLoadedMsg struct {
+	branch  string
+	commits []gitops.CommitInfo
+}
+
 func (o Options) disablesGraph() bool {
 	return o.CleanView || o.PlainView
 }
@@ -134,14 +139,14 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 	var err error
 	if currentBranch != "" {
 		if options.disablesGraph() {
-			commits, err = repo.ListCommitsFromRef("refs/heads/" + currentBranch)
+			commits, err = repo.ListCommitsFromRefWithStats("refs/heads/"+currentBranch, options.showsLineDiffs())
 		} else {
-			commits, graph, err = repo.ListCommitsFromRefWithGraphOrder("refs/heads/"+currentBranch, options.GraphOrder)
+			commits, graph, err = repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+currentBranch, options.GraphOrder, options.showsLineDiffs())
 		}
 	} else if options.disablesGraph() {
-		commits, err = repo.ListAllCommits()
+		commits, err = repo.ListAllCommitsWithStats(options.showsLineDiffs())
 	} else {
-		commits, graph, err = repo.ListAllCommitsWithGraphOrder(options.GraphOrder)
+		commits, graph, err = repo.ListAllCommitsWithGraphOrderAndStats(options.GraphOrder, options.showsLineDiffs())
 	}
 	if graph == nil {
 		graph = &gitops.Graph{}
@@ -179,13 +184,11 @@ func NewModelWithOptions(repo *gitops.Repository, options Options) Model {
 	bl.SetFilteringEnabled(false)
 	bl.Styles.Title = titleStyle
 
-	authorHistory := loadAuthorHistory(repo, currentBranch, commits)
-
 	return Model{
 		state:           ViewList,
 		repo:            repo,
 		commits:         commits,
-		authorHistory:   authorHistory,
+		authorHistory:   commits,
 		graph:           graph,
 		editQueue:       make([]gitops.ForgeChange, 0),
 		editMap:         make(map[string]*gitops.ForgeChange),
@@ -203,7 +206,7 @@ func loadAuthorHistory(repo *gitops.Repository, currentBranch string, fallback [
 	if currentBranch == "" {
 		return fallback
 	}
-	commits, err := repo.ListAllCommits()
+	commits, err := repo.ListAllCommitsWithStats(false)
 	if err != nil {
 		return fallback
 	}
@@ -211,7 +214,7 @@ func loadAuthorHistory(repo *gitops.Repository, currentBranch string, fallback [
 }
 
 func (m Model) Init() tea.Cmd {
-	return nil
+	return loadAuthorHistoryCmd(m.repo, m.currentBranch, m.authorHistory)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -221,6 +224,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.list.SetSize(msg.Width, m.height-2)
 		m.branchList.SetSize(msg.Width, m.height-2)
+		return m, nil
+
+	case authorHistoryLoadedMsg:
+		if msg.branch == m.currentBranch {
+			m.authorHistory = msg.commits
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -254,6 +263,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.list, cmd = m.list.Update(msg)
 	}
 	return m, cmd
+}
+
+func loadAuthorHistoryCmd(repo *gitops.Repository, currentBranch string, fallback []gitops.CommitInfo) tea.Cmd {
+	if currentBranch == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		return authorHistoryLoadedMsg{branch: currentBranch, commits: loadAuthorHistory(repo, currentBranch, fallback)}
+	}
 }
 
 func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -870,6 +888,9 @@ func (m *Model) toggleSetting(item SettingItem) {
 		m.options.ShowEmail = !m.options.ShowEmail
 	case SettingLineDiffs:
 		m.options.HideLineDiffs = !m.options.HideLineDiffs
+		if m.options.showsLineDiffs() && !m.lineDiffsLoaded() {
+			m.refresh()
+		}
 	}
 }
 
@@ -1095,9 +1116,9 @@ func (m *Model) ensureGraphLoaded() error {
 	var graph *gitops.Graph
 	var err error
 	if m.currentBranch != "" {
-		commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrder("refs/heads/"+m.currentBranch, m.options.GraphOrder)
+		commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+m.currentBranch, m.options.GraphOrder, m.options.showsLineDiffs())
 	} else {
-		commits, graph, err = m.repo.ListAllCommitsWithGraphOrder(m.options.GraphOrder)
+		commits, graph, err = m.repo.ListAllCommitsWithGraphOrderAndStats(m.options.GraphOrder, m.options.showsLineDiffs())
 	}
 	if err != nil {
 		return err
@@ -1106,7 +1127,7 @@ func (m *Model) ensureGraphLoaded() error {
 		graph = &gitops.Graph{}
 	}
 	m.commits = commits
-	m.authorHistory = loadAuthorHistory(m.repo, m.currentBranch, commits)
+	m.authorHistory = commits
 	m.graph = graph
 	m.list.SetItems(commitListItems(commits))
 	return nil
@@ -1620,14 +1641,14 @@ func (m *Model) refresh() {
 	var err error
 	if m.currentBranch != "" {
 		if m.options.disablesGraph() {
-			commits, err = m.repo.ListCommitsFromRef("refs/heads/" + m.currentBranch)
+			commits, err = m.repo.ListCommitsFromRefWithStats("refs/heads/"+m.currentBranch, m.options.showsLineDiffs())
 		} else {
-			commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrder("refs/heads/"+m.currentBranch, m.options.GraphOrder)
+			commits, graph, err = m.repo.ListCommitsFromRefWithGraphOrderAndStats("refs/heads/"+m.currentBranch, m.options.GraphOrder, m.options.showsLineDiffs())
 		}
 	} else if m.options.disablesGraph() {
-		commits, err = m.repo.ListAllCommits()
+		commits, err = m.repo.ListAllCommitsWithStats(m.options.showsLineDiffs())
 	} else {
-		commits, graph, err = m.repo.ListAllCommitsWithGraphOrder(m.options.GraphOrder)
+		commits, graph, err = m.repo.ListAllCommitsWithGraphOrderAndStats(m.options.GraphOrder, m.options.showsLineDiffs())
 	}
 	if err != nil {
 		return
@@ -1636,12 +1657,21 @@ func (m *Model) refresh() {
 		graph = &gitops.Graph{}
 	}
 	m.commits = commits
-	m.authorHistory = loadAuthorHistory(m.repo, m.currentBranch, commits)
+	m.authorHistory = commits
 	m.graph = graph
 	m.editQueue = make([]gitops.ForgeChange, 0)
 	m.editMap = make(map[string]*gitops.ForgeChange)
 	m.undoStack = nil
 	m.list.SetItems(commitListItems(commits))
+}
+
+func (m Model) lineDiffsLoaded() bool {
+	for _, commit := range m.commits {
+		if !commit.StatsLoaded {
+			return false
+		}
+	}
+	return true
 }
 
 func commitListItems(commits []gitops.CommitInfo) []list.Item {

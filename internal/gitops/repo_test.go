@@ -16,7 +16,7 @@ func TestParseCommitInfoLogKeepsMultilineMessageAndStats(t *testing.T) {
 		"-\t-\tbinary.dat\n" +
 		"7\t2\tdir/file.go\n"
 
-	commits := parseCommitInfoLog(output)
+	commits := parseCommitInfoLog(output, true)
 	if len(commits) != 1 {
 		t.Fatalf("len(commits) = %d, want 1", len(commits))
 	}
@@ -43,5 +43,27 @@ func TestParseCommitInfoLogKeepsMultilineMessageAndStats(t *testing.T) {
 	}
 	if commit.Additions != 10 || commit.Deletions != 3 {
 		t.Fatalf("stats = +%d -%d, want +10 -3", commit.Additions, commit.Deletions)
+	}
+	if !commit.StatsLoaded {
+		t.Fatal("StatsLoaded = false, want true")
+	}
+}
+
+func TestParseCommitInfoLogCanSkipStats(t *testing.T) {
+	output := commitRecordMarker + "1111111111111111111111111111111111111111\x1f" +
+		"Test User\x1ftest@example.com\x1f2024-01-02T03:04:05+02:00\x1f" +
+		"\x1fsubject\n\nbody paragraph\x1f"
+
+	commits := parseCommitInfoLog(output, false)
+	if len(commits) != 1 {
+		t.Fatalf("len(commits) = %d, want 1", len(commits))
+	}
+
+	commit := commits[0]
+	if commit.Additions != 0 || commit.Deletions != 0 {
+		t.Fatalf("stats = +%d -%d, want +0 -0", commit.Additions, commit.Deletions)
+	}
+	if commit.StatsLoaded {
+		t.Fatal("StatsLoaded = true, want false")
 	}
 }

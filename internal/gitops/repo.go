@@ -43,11 +43,19 @@ func (r *Repository) Reload() error {
 }
 
 func (r *Repository) ListAllCommits() ([]CommitInfo, error) {
-	return r.listCommitInfoFromGit("--exclude=refs/backtrack-backup/*", "--all")
+	return r.ListAllCommitsWithStats(true)
+}
+
+func (r *Repository) ListAllCommitsWithStats(includeStats bool) ([]CommitInfo, error) {
+	return r.listCommitInfoFromGit(includeStats, "--exclude=refs/backtrack-backup/*", "--all")
 }
 
 func (r *Repository) ListCommitsFromRef(refName string) ([]CommitInfo, error) {
-	commits, err := r.listCommitInfoFromGit(refName)
+	return r.ListCommitsFromRefWithStats(refName, true)
+}
+
+func (r *Repository) ListCommitsFromRefWithStats(refName string, includeStats bool) ([]CommitInfo, error) {
+	commits, err := r.listCommitInfoFromGit(includeStats, refName)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +90,22 @@ func (r *Repository) ListCommitsFromRefWithGraphOrder(refName string, order Grap
 }
 
 func (r *Repository) listCommitsWithGraph(order GraphOrder, branchName string, refArgs ...string) ([]CommitInfo, *Graph, error) {
+	return r.listCommitsWithGraphAndStats(order, true, branchName, refArgs...)
+}
+
+func (r *Repository) ListAllCommitsWithGraphOrderAndStats(order GraphOrder, includeStats bool) ([]CommitInfo, *Graph, error) {
+	return r.listCommitsWithGraphAndStats(order, includeStats, "", "--exclude=refs/backtrack-backup/*", "--all")
+}
+
+func (r *Repository) ListCommitsFromRefWithGraphOrderAndStats(refName string, order GraphOrder, includeStats bool) ([]CommitInfo, *Graph, error) {
+	branchName := ""
+	if strings.HasPrefix(refName, "refs/heads/") {
+		branchName = strings.TrimPrefix(refName, "refs/heads/")
+	}
+	return r.listCommitsWithGraphAndStats(order, includeStats, branchName, refName)
+}
+
+func (r *Repository) listCommitsWithGraphAndStats(order GraphOrder, includeStats bool, branchName string, refArgs ...string) ([]CommitInfo, *Graph, error) {
 	if err := r.Reload(); err != nil {
 		return nil, nil, err
 	}
@@ -98,7 +122,7 @@ func (r *Repository) listCommitsWithGraph(order GraphOrder, branchName string, r
 	graph := ParseGraphRows(output)
 	infoArgs := append([]string{}, order.GitLogArgs()...)
 	infoArgs = append(infoArgs, refArgs...)
-	commitInfos, err := r.listCommitInfoFromGit(infoArgs...)
+	commitInfos, err := r.listCommitInfoFromGit(includeStats, infoArgs...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,7 +155,7 @@ func (r *Repository) listCommitsWithGraph(order GraphOrder, branchName string, r
 	return commits, graph, nil
 }
 
-func (r *Repository) listCommitInfoFromGit(refArgs ...string) ([]CommitInfo, error) {
+func (r *Repository) listCommitInfoFromGit(includeStats bool, refArgs ...string) ([]CommitInfo, error) {
 	if err := r.Reload(); err != nil {
 		return nil, err
 	}
@@ -139,9 +163,10 @@ func (r *Repository) listCommitInfoFromGit(refArgs ...string) ([]CommitInfo, err
 	args := []string{
 		"log",
 		"--no-color",
-		"--numstat",
-		"--diff-merges=first-parent",
 		"--format=" + commitRecordMarker + "%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%B%x1f",
+	}
+	if includeStats {
+		args = append(args, "--numstat", "--diff-merges=first-parent")
 	}
 	args = append(args, refArgs...)
 	output, err := r.gitOutput(args...)
@@ -149,7 +174,7 @@ func (r *Repository) listCommitInfoFromGit(refArgs ...string) ([]CommitInfo, err
 		return nil, err
 	}
 
-	commits := parseCommitInfoLog(output)
+	commits := parseCommitInfoLog(output, includeStats)
 	sort.Slice(commits, func(i, j int) bool {
 		return commits[i].AuthorDate.After(commits[j].AuthorDate)
 	})
@@ -158,7 +183,7 @@ func (r *Repository) listCommitInfoFromGit(refArgs ...string) ([]CommitInfo, err
 
 const commitRecordMarker = "\x1e"
 
-func parseCommitInfoLog(output string) []CommitInfo {
+func parseCommitInfoLog(output string, includeStats bool) []CommitInfo {
 	records := strings.Split(output, commitRecordMarker)
 	commits := make([]CommitInfo, 0, len(records))
 	seen := make(map[plumbing.Hash]bool)
@@ -198,6 +223,7 @@ func parseCommitInfoLog(output string) []CommitInfo {
 			Parents:     parseParentHashes(fields[4]),
 			Additions:   additions,
 			Deletions:   deletions,
+			StatsLoaded: includeStats,
 		})
 	}
 
