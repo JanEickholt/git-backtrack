@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -1038,76 +1037,11 @@ func smartAdjustChanges(commits []gitops.CommitInfo, selectedHashes []string, ti
 }
 
 func calculateSmartTimeAdjust(commits []gitops.CommitInfo, selectedHashes []string, timeToAdd time.Duration) map[string]time.Duration {
-	result := make(map[string]time.Duration)
 	selected := make(map[string]bool, len(selectedHashes))
 	for _, hash := range selectedHashes {
-		selected[strings.ToLower(hash)] = true
+		selected[hash] = true
 	}
-
-	selectedCommits := make([]gitops.CommitInfo, 0, len(selectedHashes))
-	for _, commit := range commits {
-		if selected[strings.ToLower(commit.Hash.String())] {
-			selectedCommits = append(selectedCommits, commit)
-		}
-	}
-	if len(selectedCommits) < 2 || timeToAdd == 0 {
-		return result
-	}
-
-	weights := make([]float64, len(selectedCommits)-1)
-	var totalWeight float64
-	for i := 0; i < len(weights); i++ {
-		weight := smartCommitWeight(selectedCommits[i])
-		weights[i] = weight
-		totalWeight += weight
-	}
-	if totalWeight <= 0 {
-		return result
-	}
-
-	cumulative := time.Duration(0)
-	oldestIndex := len(selectedCommits) - 1
-	result[strings.ToLower(selectedCommits[oldestIndex].Hash.String())] = 0
-	for i := oldestIndex - 1; i >= 0; i-- {
-		gap := time.Duration(float64(timeToAdd) * weights[i] / totalWeight)
-		cumulative += gap
-		result[strings.ToLower(selectedCommits[i].Hash.String())] = cumulative
-	}
-	result[strings.ToLower(selectedCommits[0].Hash.String())] = timeToAdd
-	return result
-}
-
-func smartCommitWeight(commit gitops.CommitInfo) float64 {
-	changedLines := commit.Additions + commit.Deletions
-	if changedLines < 0 {
-		changedLines = 0
-	}
-
-	weight := 1.0 + math.Sqrt(float64(changedLines))
-	message := strings.ToLower(strings.TrimSpace(commit.Message))
-	subject := strings.SplitN(message, "\n", 2)[0]
-
-	switch {
-	case strings.HasPrefix(subject, "chore") || strings.HasPrefix(subject, "docs"):
-		weight *= 0.45
-	case strings.HasPrefix(subject, "test"):
-		weight *= 0.65
-	case strings.HasPrefix(subject, "fix"):
-		weight *= 1.15
-	case strings.HasPrefix(subject, "feat"):
-		weight *= 1.2
-	case strings.HasPrefix(subject, "refactor"):
-		weight *= 1.05
-	}
-
-	if strings.Contains(subject, "lint") || strings.Contains(subject, "format") {
-		weight *= 0.5
-	}
-	if strings.Contains(subject, "error") || strings.Contains(subject, "bug") || strings.Contains(subject, "crash") {
-		weight *= 1.15
-	}
-
-	return weight
+	return gitops.CalculateSmartTimeAdjust(commits, selected, timeToAdd)
 }
 
 func parseToolDuration(adjustment string) (time.Duration, bool) {
