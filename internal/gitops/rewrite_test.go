@@ -139,6 +139,57 @@ func TestApplyChangesDateEditForOtherAuthorDoesNotUseDefaultSigningKey(t *testin
 	}
 }
 
+func TestApplyChangesEditAllCommitsPreservesMergeShape(t *testing.T) {
+	dir := initGitRepo(t)
+
+	commitFileAt(t, dir, "base.txt", "base\n", "base", "2024-01-01T00:00:00Z")
+	commitFileAt(t, dir, "shared.txt", "shared\n", "shared", "2024-01-01T01:00:00Z")
+	gitOutput(t, dir, "checkout", "-b", "feature")
+	commitFileAt(t, dir, "feature.txt", "feature\n", "feature", "2024-01-01T02:00:00Z")
+	gitOutput(t, dir, "checkout", "main")
+	commitFileAt(t, dir, "main-one.txt", "main one\n", "main one", "2024-01-01T03:00:00Z")
+	commitFileAt(t, dir, "main-two.txt", "main two\n", "main two", "2024-01-01T04:00:00Z")
+	gitOutput(t, dir, "merge", "--no-ff", "feature", "-m", "merge feature")
+	commitFileAt(t, dir, "tail.txt", "tail\n", "tail", "2024-01-01T05:00:00Z")
+
+	originalCount := strings.TrimSpace(gitOutput(t, dir, "rev-list", "--count", "HEAD"))
+	originalSideCount := strings.TrimSpace(gitOutput(t, dir, "rev-list", "--count", "HEAD~1^2", "--not", "HEAD~1^1"))
+	if originalCount != "7" || originalSideCount != "1" {
+		t.Fatalf("test setup produced count=%s side=%s, want 7 and 1", originalCount, originalSideCount)
+	}
+
+	hashes := strings.Fields(gitOutput(t, dir, "log", "--format=%H"))
+	newDate := mustParseTime(t, "2024-02-03T04:05:06Z")
+	changes := make([]ForgeChange, 0, len(hashes))
+	for _, hash := range hashes {
+		changes = append(changes, ForgeChange{
+			OriginalHash: plumbing.NewHash(hash),
+			Operation:    ForgeEdit,
+			NewDate:      &newDate,
+		})
+	}
+
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("open repo: %v", err)
+	}
+	if _, err := NewHistoryRewriter(repo).ApplyChanges(changes); err != nil {
+		t.Fatalf("apply changes: %v", err)
+	}
+
+	count := strings.TrimSpace(gitOutput(t, dir, "rev-list", "--count", "HEAD"))
+	if count != originalCount {
+		t.Fatalf("commit count = %s, want %s", count, originalCount)
+	}
+	sideCount := strings.TrimSpace(gitOutput(t, dir, "rev-list", "--count", "HEAD~1^2", "--not", "HEAD~1^1"))
+	if sideCount != originalSideCount {
+		t.Fatalf("merge side count = %s, want %s", sideCount, originalSideCount)
+	}
+	if subjects := gitOutput(t, dir, "log", "--format=%s", "HEAD~1^2", "--not", "HEAD~1^1"); strings.TrimSpace(subjects) != "feature" {
+		t.Fatalf("merge side subjects = %q, want feature only", strings.TrimSpace(subjects))
+	}
+}
+
 func TestApplyChangesDropReplaysOtherAuthorWithoutDefaultSigningKey(t *testing.T) {
 	dir := initGitRepo(t)
 	t.Setenv("HOME", t.TempDir())

@@ -39,13 +39,12 @@ func (hr *HistoryRewriter) ApplyChanges(changes []ForgeChange) (*RewriteResult, 
 		return nil, fmt.Errorf("failed to get HEAD: %w", err)
 	}
 
-	commits, err := hr.collectCommits(head.Hash())
+	commits, err := hr.collectCommitsParentFirst(head.Hash())
 	if err != nil {
 		return nil, fmt.Errorf("failed to collect commits: %w", err)
 	}
 
-	for i := len(commits) - 1; i >= 0; i-- {
-		commit := commits[i]
+	for _, commit := range commits {
 
 		change, needsForge := changeMap[commit.Hash]
 
@@ -210,4 +209,35 @@ func (hr *HistoryRewriter) collectCommits(startHash plumbing.Hash) ([]*object.Co
 		return nil
 	})
 	return commits, err
+}
+
+func (hr *HistoryRewriter) collectCommitsParentFirst(startHash plumbing.Hash) ([]*object.Commit, error) {
+	var commits []*object.Commit
+	seen := make(map[plumbing.Hash]bool)
+
+	var visit func(plumbing.Hash) error
+	visit = func(hash plumbing.Hash) error {
+		if seen[hash] {
+			return nil
+		}
+		seen[hash] = true
+
+		commit, err := hr.repo.repo.CommitObject(hash)
+		if err != nil {
+			return err
+		}
+		for _, parentHash := range commit.ParentHashes {
+			if err := visit(parentHash); err != nil {
+				return err
+			}
+		}
+
+		commits = append(commits, commit)
+		return nil
+	}
+
+	if err := visit(startHash); err != nil {
+		return nil, err
+	}
+	return commits, nil
 }
