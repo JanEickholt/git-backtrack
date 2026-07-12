@@ -61,6 +61,15 @@ git-backtrack backups --path . --json
 git-backtrack restore --path . --json --yes --backup 20250101-120000
 ```
 
+`list` returns the 5 newest commits by default to keep responses small. Pass `--limit N` to request a different count, `--offset N` to skip newer commits (paginate), `--stats` to include per-commit `additions`/`deletions`, or `--limit 0` (or `--all`) for every reachable commit. The response includes `total` (reachable count), `limit` (applied cap, omitted when uncapped), `offset` (skipped newest count, omitted when 0), `remaining` (commits beyond the returned window, omitted when 0), and `truncated` (true when the response was capped or offset):
+
+```sh
+git-backtrack list --path . --json --limit 20
+git-backtrack list --path . --json --offset 5          # next page after the default 5
+git-backtrack list --path . --json --stats             # include additions/deletions per commit
+git-backtrack list --path . --json --all
+```
+
 Add `--compact` to any JSON command to emit the response on a single line with no indentation (useful when piping into `jq -c` or another agent):
 
 ```sh
