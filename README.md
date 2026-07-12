@@ -119,12 +119,19 @@ Plans require an expected head so stale rewrites are rejected:
       "op": "fold",
       "hashes": ["1111111", "2222222"],
       "anchor": "1111111"
+    },
+    {
+      "op": "smart_adjust",
+      "hashes": ["3333333", "4444444", "5555555"],
+      "adjustment": "+10h"
     }
   ]
 }
 ```
 
 Hashes may be full 40-character hashes or unambiguous hex prefixes of at least 7 characters.
+
+`smart_adjust` applies the TUI smart-adjust date distribution in JSON mode. Provide at least two commits in newest-first order and an `adjustment` duration such as `+10h`, `-30m`, `1d`, or `1h +30m`. The newest selected commit receives the full adjustment, the oldest stays fixed, and intermediate commits are weighted by commit size and subject type.
 
 ### Warnings
 

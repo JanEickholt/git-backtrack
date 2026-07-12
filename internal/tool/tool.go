@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -37,6 +38,7 @@ type PlanOperation struct {
 	AuthorEmail *string  `json:"author_email,omitempty"`
 	AuthorDate  *string  `json:"author_date,omitempty"`
 	Message     *string  `json:"message,omitempty"`
+	Adjustment  *string  `json:"adjustment,omitempty"`
 }
 
 type Error struct {
@@ -569,6 +571,7 @@ func runRestore(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func toolHelp() HelpResponse {
 	exampleMessage := "new commit message"
+	exampleAdjustment := "+10h"
 	return HelpResponse{
 		OK:          true,
 		Name:        "git-backtrack tool mode",
@@ -602,6 +605,7 @@ func toolHelp() HelpResponse {
 			{Op: "edit", Required: []string{"op", "hash"}, Optional: []string{"author_name", "author_email", "author_date", "message"}, Description: "Edit metadata/message for one commit. author_name and author_email must be supplied together. author_date must be RFC3339."},
 			{Op: "drop", Required: []string{"op", "hash"}, Description: "Drop one commit during replay."},
 			{Op: "fold", Required: []string{"op", "hashes", "anchor"}, Description: "Fold multiple commits into one. hashes must contain at least two commits; anchor must be one of hashes and provides message/date metadata."},
+			{Op: "smart_adjust", Required: []string{"op", "hashes", "adjustment"}, Description: "Adjust selected commit author dates with the same weighted distribution as the TUI smart adjust field. adjustment accepts +10h, -30m, 1d, or compound values like 1h +30m."},
 		},
 		ExamplePlan: Plan{
 			Version:      planVersion,
@@ -611,6 +615,7 @@ func toolHelp() HelpResponse {
 				{Op: "edit", Hash: "89abcde", Message: &exampleMessage},
 				{Op: "drop", Hash: "fedcba9876543210fedcba9876543210fedcba98"},
 				{Op: "fold", Hashes: []string{"1111111", "2222222"}, Anchor: "2222222"},
+				{Op: "smart_adjust", Hashes: []string{"3333333", "4444444", "5555555"}, Adjustment: &exampleAdjustment},
 			},
 		},
 		ResponseShapes: map[string]string{
@@ -638,6 +643,7 @@ func toolHelp() HelpResponse {
 			"invalid_date_filter",
 			"invalid_date_range",
 			"invalid_hash",
+			"invalid_adjustment",
 			"list_backups_failed",
 			"merge_replay_unsupported",
 			"missing_expected_head",
@@ -649,6 +655,7 @@ func toolHelp() HelpResponse {
 			"resolve_ref_failed",
 			"restore_failed",
 			"root_replay_unsupported",
+			"smart_adjust_requires_multiple_commits",
 			"unknown_operation",
 			"unsupported_plan_version",
 		},
@@ -734,7 +741,7 @@ func validatePlan(repo *gitops.Repository, plan Plan) validationResult {
 	result.commits = commits
 	resolver := newHashResolver(commits)
 
-	changes, resolved, warnings, errors := resolveOperations(plan.Operations, resolver)
+	changes, resolved, warnings, errors := resolveOperations(plan.Operations, resolver, commits)
 	result.changes = changes
 	result.resolved = resolved
 	result.warnings = warnings
@@ -747,11 +754,11 @@ func validatePlan(repo *gitops.Repository, plan Plan) validationResult {
 	if len(result.errors) > 0 {
 		return result
 	}
-	result.warnings = append(result.warnings, validateDateOrdering(plan, commits, resolver)...)
+	result.warnings = append(result.warnings, validateDateOrdering(changes, commits)...)
 	return result
 }
 
-func resolveOperations(operations []PlanOperation, resolver hashResolver) ([]gitops.ForgeChange, []PlanOperation, []Warning, []Error) {
+func resolveOperations(operations []PlanOperation, resolver hashResolver, commits []gitops.CommitInfo) ([]gitops.ForgeChange, []PlanOperation, []Warning, []Error) {
 	var changes []gitops.ForgeChange
 	var resolved []PlanOperation
 	var warnings []Warning
@@ -838,6 +845,47 @@ func resolveOperations(operations []PlanOperation, resolver hashResolver) ([]git
 				changes = append(changes, gitops.ForgeChange{OriginalHash: hash, Operation: gitops.ForgeCombine, CombineGroup: group, CombineAnchor: anchorHash})
 			}
 			resolved = append(resolved, PlanOperation{Op: "fold", Hashes: resolvedHashes, Anchor: resolvedAnchor})
+
+		case "smart_adjust":
+			if len(op.Hashes) < 2 {
+				errorsOut = append(errorsOut, errorObject("smart_adjust_requires_multiple_commits", "smart_adjust requires at least two hashes"))
+				continue
+			}
+			if op.Adjustment == nil || strings.TrimSpace(*op.Adjustment) == "" {
+				errorsOut = append(errorsOut, errorObject("invalid_adjustment", "smart_adjust adjustment is required"))
+				continue
+			}
+			adjustment, ok := parseToolDuration(*op.Adjustment)
+			if !ok {
+				errorsOut = append(errorsOut, errorObject("invalid_adjustment", "adjustment must be a signed duration like +10h, -30m, or 1d"))
+				continue
+			}
+
+			resolvedHashes := make([]string, 0, len(op.Hashes))
+			for _, value := range op.Hashes {
+				hash, errs := resolver.resolve(value)
+				errorsOut = append(errorsOut, errs...)
+				if hash != "" {
+					resolvedHashes = append(resolvedHashes, hash)
+				}
+			}
+			if len(resolvedHashes) != len(op.Hashes) {
+				continue
+			}
+			duplicate := false
+			for _, hash := range resolvedHashes {
+				if previous := seenOperation(seen, hash, "smart_adjust"); previous != "" {
+					errorsOut = append(errorsOut, Error{Code: "duplicate_operation", Message: fmt.Sprintf("commit already has %s operation", previous), Hash: hash})
+					duplicate = true
+				}
+			}
+			if duplicate {
+				continue
+			}
+
+			smartChanges := smartAdjustChanges(commits, resolvedHashes, adjustment)
+			changes = append(changes, smartChanges...)
+			resolved = append(resolved, PlanOperation{Op: "smart_adjust", Hashes: resolvedHashes, Adjustment: op.Adjustment})
 
 		default:
 			errorsOut = append(errorsOut, Error{Code: "unknown_operation", Message: fmt.Sprintf("unknown operation %q", op.Op)})
@@ -964,25 +1012,194 @@ func validateReplayLimits(changes []gitops.ForgeChange, commits []gitops.CommitI
 	return errorsOut
 }
 
+func smartAdjustChanges(commits []gitops.CommitInfo, selectedHashes []string, timeToAdd time.Duration) []gitops.ForgeChange {
+	adjustments := calculateSmartTimeAdjust(commits, selectedHashes, timeToAdd)
+	if len(adjustments) == 0 {
+		return nil
+	}
+	selected := make(map[string]bool, len(selectedHashes))
+	for _, hash := range selectedHashes {
+		selected[strings.ToLower(hash)] = true
+	}
+	changes := make([]gitops.ForgeChange, 0, len(adjustments))
+	for _, commit := range commits {
+		hash := strings.ToLower(commit.Hash.String())
+		if !selected[hash] {
+			continue
+		}
+		adjustment, ok := adjustments[hash]
+		if !ok || adjustment == 0 {
+			continue
+		}
+		newDate := commit.AuthorDate.Add(adjustment)
+		changes = append(changes, gitops.ForgeChange{OriginalHash: commit.Hash, NewDate: &newDate})
+	}
+	return changes
+}
+
+func calculateSmartTimeAdjust(commits []gitops.CommitInfo, selectedHashes []string, timeToAdd time.Duration) map[string]time.Duration {
+	result := make(map[string]time.Duration)
+	selected := make(map[string]bool, len(selectedHashes))
+	for _, hash := range selectedHashes {
+		selected[strings.ToLower(hash)] = true
+	}
+
+	selectedCommits := make([]gitops.CommitInfo, 0, len(selectedHashes))
+	for _, commit := range commits {
+		if selected[strings.ToLower(commit.Hash.String())] {
+			selectedCommits = append(selectedCommits, commit)
+		}
+	}
+	if len(selectedCommits) < 2 || timeToAdd == 0 {
+		return result
+	}
+
+	weights := make([]float64, len(selectedCommits)-1)
+	var totalWeight float64
+	for i := 0; i < len(weights); i++ {
+		weight := smartCommitWeight(selectedCommits[i])
+		weights[i] = weight
+		totalWeight += weight
+	}
+	if totalWeight <= 0 {
+		return result
+	}
+
+	cumulative := time.Duration(0)
+	oldestIndex := len(selectedCommits) - 1
+	result[strings.ToLower(selectedCommits[oldestIndex].Hash.String())] = 0
+	for i := oldestIndex - 1; i >= 0; i-- {
+		gap := time.Duration(float64(timeToAdd) * weights[i] / totalWeight)
+		cumulative += gap
+		result[strings.ToLower(selectedCommits[i].Hash.String())] = cumulative
+	}
+	result[strings.ToLower(selectedCommits[0].Hash.String())] = timeToAdd
+	return result
+}
+
+func smartCommitWeight(commit gitops.CommitInfo) float64 {
+	changedLines := commit.Additions + commit.Deletions
+	if changedLines < 0 {
+		changedLines = 0
+	}
+
+	weight := 1.0 + math.Sqrt(float64(changedLines))
+	message := strings.ToLower(strings.TrimSpace(commit.Message))
+	subject := strings.SplitN(message, "\n", 2)[0]
+
+	switch {
+	case strings.HasPrefix(subject, "chore") || strings.HasPrefix(subject, "docs"):
+		weight *= 0.45
+	case strings.HasPrefix(subject, "test"):
+		weight *= 0.65
+	case strings.HasPrefix(subject, "fix"):
+		weight *= 1.15
+	case strings.HasPrefix(subject, "feat"):
+		weight *= 1.2
+	case strings.HasPrefix(subject, "refactor"):
+		weight *= 1.05
+	}
+
+	if strings.Contains(subject, "lint") || strings.Contains(subject, "format") {
+		weight *= 0.5
+	}
+	if strings.Contains(subject, "error") || strings.Contains(subject, "bug") || strings.Contains(subject, "crash") {
+		weight *= 1.15
+	}
+
+	return weight
+}
+
+func parseToolDuration(adjustment string) (time.Duration, bool) {
+	adj := strings.TrimSpace(adjustment)
+	if adj == "" {
+		return 0, false
+	}
+
+	var total time.Duration
+	i := 0
+	for i < len(adj) {
+		for i < len(adj) && adj[i] == ' ' {
+			i++
+		}
+		if i >= len(adj) {
+			break
+		}
+
+		sign := int64(1)
+		if adj[i] == '-' {
+			sign = -1
+			i++
+		} else if adj[i] == '+' {
+			i++
+		}
+		for i < len(adj) && adj[i] == ' ' {
+			i++
+		}
+
+		amountStart := i
+		for i < len(adj) && adj[i] >= '0' && adj[i] <= '9' {
+			i++
+		}
+		if amountStart == i {
+			return 0, false
+		}
+		amount, err := strconv.ParseInt(adj[amountStart:i], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+
+		unitStart := i
+		for i < len(adj) && ((adj[i] >= 'a' && adj[i] <= 'z') || (adj[i] >= 'A' && adj[i] <= 'Z')) {
+			i++
+		}
+		if unitStart == i {
+			return 0, false
+		}
+		unitDuration, ok := toolDurationUnit(strings.ToLower(adj[unitStart:i]))
+		if !ok {
+			return 0, false
+		}
+		total += time.Duration(sign*amount) * unitDuration
+
+		for i < len(adj) && adj[i] == ' ' {
+			i++
+		}
+		if i < len(adj) && adj[i] != '+' && adj[i] != '-' && (adj[i] < '0' || adj[i] > '9') {
+			return 0, false
+		}
+	}
+	return total, true
+}
+
+func toolDurationUnit(unit string) (time.Duration, bool) {
+	switch unit {
+	case "s", "sec", "second", "seconds":
+		return time.Second, true
+	case "m", "min", "minute", "minutes":
+		return time.Minute, true
+	case "h", "hour", "hours":
+		return time.Hour, true
+	case "d", "day", "days":
+		return 24 * time.Hour, true
+	case "w", "week", "weeks":
+		return 7 * 24 * time.Hour, true
+	default:
+		return 0, false
+	}
+}
+
 // validateDateOrdering inspects edited commits whose author_date was changed
 // and emits informational warnings when the new date is earlier than a parent
 // commit's author_date, or later than a child commit's author_date. The
 // commits slice is ordered newest-first per ListCommitsFromRefWithGraph.
-func validateDateOrdering(plan Plan, commits []gitops.CommitInfo, resolver hashResolver) []Warning {
+func validateDateOrdering(changes []gitops.ForgeChange, commits []gitops.CommitInfo) []Warning {
 	edits := make(map[string]time.Time)
-	for _, op := range plan.Operations {
-		if strings.ToLower(op.Op) != "edit" || op.AuthorDate == nil {
+	for _, change := range changes {
+		if change.NewDate == nil {
 			continue
 		}
-		parsed, err := time.Parse(time.RFC3339, *op.AuthorDate)
-		if err != nil {
-			continue
-		}
-		hash, errs := resolver.resolve(op.Hash)
-		if len(errs) > 0 || hash == "" {
-			continue
-		}
-		edits[strings.ToLower(hash)] = parsed
+		edits[strings.ToLower(change.OriginalHash.String())] = *change.NewDate
 	}
 	if len(edits) == 0 {
 		return nil

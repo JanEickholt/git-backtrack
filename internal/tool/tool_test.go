@@ -555,6 +555,16 @@ func TestToolHelpExposesBackupsRestoreAndWarningCodes(t *testing.T) {
 			t.Fatalf("help missing error code %q: %+v", code, response.ErrorCodes)
 		}
 	}
+	foundSmartAdjust := false
+	for _, schema := range response.OperationSchemas {
+		if schema.Op == "smart_adjust" {
+			foundSmartAdjust = true
+			break
+		}
+	}
+	if !foundSmartAdjust {
+		t.Fatalf("help missing smart_adjust schema: %+v", response.OperationSchemas)
+	}
 	found := false
 	for _, step := range response.RecommendedSequence {
 		if strings.Contains(step, "restore") {
@@ -564,6 +574,82 @@ func TestToolHelpExposesBackupsRestoreAndWarningCodes(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("recommended sequence missing restore step: %+v", response.RecommendedSequence)
+	}
+}
+
+func TestApplySmartAdjustUpdatesSelectedAuthorDates(t *testing.T) {
+	dir := initGitRepo(t)
+	commitFileDated(t, dir, "a.txt", "a\n", "chore: base", "2024-01-01T00:00:00Z")
+	oldestHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	commitFileDated(t, dir, "b.txt", "b\n", "fix: middle", "2024-01-02T00:00:00Z")
+	middleHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	commitFileDated(t, dir, "c.txt", "c\n", "feat: newest", "2024-01-03T00:00:00Z")
+	headHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	adjustment := "+6h"
+
+	planPath := writePlan(t, dir, Plan{
+		Version:      1,
+		Ref:          "refs/heads/main",
+		ExpectedHead: headHash,
+		Operations: []PlanOperation{
+			{Op: "smart_adjust", Hashes: []string{headHash[:7], middleHash[:7], oldestHash[:7]}, Adjustment: &adjustment},
+		},
+	})
+
+	var validateStdout bytes.Buffer
+	if status := Run([]string{"validate", "--path", dir, "--plan", planPath, "--json"}, &validateStdout, &bytes.Buffer{}); status != 0 {
+		t.Fatalf("validate status = %d, output = %s", status, validateStdout.String())
+	}
+	var validateResp ValidateResponse
+	if err := json.Unmarshal(validateStdout.Bytes(), &validateResp); err != nil {
+		t.Fatalf("unmarshal validate response: %v", err)
+	}
+	if !validateResp.OK || len(validateResp.ResolvedOperations) != 1 || validateResp.ResolvedOperations[0].Op != "smart_adjust" {
+		t.Fatalf("validate response = %+v, want resolved smart_adjust", validateResp)
+	}
+
+	var applyStdout bytes.Buffer
+	if status := Run([]string{"apply", "--path", dir, "--plan", planPath, "--json", "--yes"}, &applyStdout, &bytes.Buffer{}); status != 0 {
+		t.Fatalf("apply status = %d, output = %s", status, applyStdout.String())
+	}
+
+	dates := logAuthorDatesBySubject(t, dir)
+	if dates["chore: base"] != "2024-01-01T00:00:00Z" {
+		t.Fatalf("oldest date = %q, want unchanged", dates["chore: base"])
+	}
+	if dates["feat: newest"] != "2024-01-03T06:00:00Z" {
+		t.Fatalf("newest date = %q, want +6h", dates["feat: newest"])
+	}
+	middleDate, err := time.Parse(time.RFC3339, dates["fix: middle"])
+	if err != nil {
+		t.Fatalf("parse middle date: %v", err)
+	}
+	if !middleDate.After(time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)) || !middleDate.Before(time.Date(2024, 1, 2, 6, 0, 0, 0, time.UTC)) {
+		t.Fatalf("middle date = %s, want between original and +6h", middleDate.Format(time.RFC3339))
+	}
+}
+
+func TestValidateSmartAdjustRejectsInvalidAdjustment(t *testing.T) {
+	dir := initGitRepo(t)
+	commitFileDated(t, dir, "a.txt", "a\n", "a", "2024-01-01T00:00:00Z")
+	oldestHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	commitFileDated(t, dir, "b.txt", "b\n", "b", "2024-01-02T00:00:00Z")
+	headHash := strings.TrimSpace(gitOutput(t, dir, "rev-parse", "HEAD"))
+	adjustment := "tomorrow"
+	planPath := writePlan(t, dir, Plan{
+		Version:      1,
+		Ref:          "refs/heads/main",
+		ExpectedHead: headHash,
+		Operations:   []PlanOperation{{Op: "smart_adjust", Hashes: []string{headHash, oldestHash}, Adjustment: &adjustment}},
+	})
+
+	var stdout bytes.Buffer
+	status := Run([]string{"validate", "--path", dir, "--plan", planPath, "--json"}, &stdout, &bytes.Buffer{})
+	if status == 0 {
+		t.Fatalf("validate with invalid adjustment succeeded: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "invalid_adjustment") {
+		t.Fatalf("output missing invalid_adjustment: %s", stdout.String())
 	}
 }
 
@@ -583,6 +669,20 @@ func containsErrorCode(codes []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func logAuthorDatesBySubject(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	output := strings.TrimSpace(gitOutput(t, dir, "log", "--format=%s%x00%aI"))
+	dates := make(map[string]string)
+	for _, line := range strings.Split(output, "\n") {
+		parts := strings.Split(line, "\x00")
+		if len(parts) != 2 {
+			t.Fatalf("unexpected log line %q", line)
+		}
+		dates[parts[0]] = parts[1]
+	}
+	return dates
 }
 
 func commitFileDated(t *testing.T, dir string, name string, content string, message string, date string) {
