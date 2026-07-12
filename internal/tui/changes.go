@@ -209,6 +209,37 @@ func (m *Model) toggleCombineForCommits(commits []gitops.CommitInfo, anchor plum
 	}
 }
 
+func (m *Model) shortenMessageForCommits(commits []gitops.CommitInfo) {
+	for _, commit := range commits {
+		hash := commit.Hash.String()
+		existing := m.editMap[hash]
+		if existing != nil && (existing.Operation == gitops.ForgeDrop || existing.Operation == gitops.ForgeCombine) {
+			continue
+		}
+
+		effectiveMsg := commit.Message
+		if existing != nil && existing.NewMessage != "" {
+			effectiveMsg = existing.NewMessage
+		}
+
+		if !strings.Contains(effectiveMsg, "\n") {
+			continue
+		}
+
+		firstLine := strings.Split(effectiveMsg, "\n")[0]
+
+		var change gitops.ForgeChange
+		if existing != nil {
+			change = *existing
+		} else {
+			change = gitops.ForgeChange{OriginalHash: commit.Hash}
+		}
+		change.NewMessage = firstLine
+
+		m.setChange(change)
+	}
+}
+
 func (m Model) foldDisplayIndex() foldDisplayIndex {
 	index := foldDisplayIndex{ByHash: make(map[string]foldDisplay)}
 	seen := make(map[string]bool)

@@ -819,3 +819,152 @@ func TestHandleListKeyResetRemovesChange(t *testing.T) {
 		t.Fatalf("editMap still contains removed hash")
 	}
 }
+
+func TestShortenMessageForCommitsKeepsFirstLineOnly(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	commits := []gitops.CommitInfo{{Hash: hash, Message: "subject\n\n- detail one\n- detail two"}}
+	model := Model{}
+
+	model.shortenMessageForCommits(commits)
+
+	if len(model.editQueue) != 1 {
+		t.Fatalf("editQueue len = %d, want 1", len(model.editQueue))
+	}
+	change := model.editMap[hash.String()]
+	if change == nil {
+		t.Fatalf("editMap missing entry for hash")
+	}
+	if change.NewMessage != "subject" {
+		t.Fatalf("NewMessage = %q, want %q", change.NewMessage, "subject")
+	}
+}
+
+func TestShortenMessageForCommitsSkipsSingleLine(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	commits := []gitops.CommitInfo{{Hash: hash, Message: "only subject"}}
+	model := Model{}
+
+	model.shortenMessageForCommits(commits)
+
+	if len(model.editQueue) != 0 {
+		t.Fatalf("editQueue len = %d, want 0 (single-line message should be skipped)", len(model.editQueue))
+	}
+}
+
+func TestShortenMessageForCommitsPreservesOtherChanges(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	commits := []gitops.CommitInfo{{Hash: hash, Message: "subject\n- detail"}}
+	date := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
+	model := Model{}
+	model.setChange(gitops.ForgeChange{
+		OriginalHash: hash,
+		NewAuthor:    &gitops.AuthorInfo{Name: "Jan", Email: "jan@example.com"},
+		NewDate:      &date,
+	})
+
+	model.shortenMessageForCommits(commits)
+
+	if len(model.editQueue) != 1 {
+		t.Fatalf("editQueue len = %d, want 1", len(model.editQueue))
+	}
+	change := model.editMap[hash.String()]
+	if change.NewMessage != "subject" {
+		t.Fatalf("NewMessage = %q, want %q", change.NewMessage, "subject")
+	}
+	if change.NewAuthor == nil || change.NewAuthor.Name != "Jan" {
+		t.Fatalf("NewAuthor not preserved: %+v", change.NewAuthor)
+	}
+	if change.NewDate == nil || !change.NewDate.Equal(date) {
+		t.Fatalf("NewDate not preserved: %v", change.NewDate)
+	}
+}
+
+func TestShortenMessageForCommitsSkipsDroppedAndCombined(t *testing.T) {
+	dropHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	combineHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+	commits := []gitops.CommitInfo{
+		{Hash: dropHash, Message: "drop subject\n- detail"},
+		{Hash: combineHash, Message: "combine subject\n- detail"},
+	}
+	model := Model{}
+	model.setChange(gitops.ForgeChange{OriginalHash: dropHash, Operation: gitops.ForgeDrop})
+	model.setChange(gitops.ForgeChange{OriginalHash: combineHash, Operation: gitops.ForgeCombine, CombineGroup: []plumbing.Hash{combineHash}, CombineAnchor: combineHash})
+
+	model.shortenMessageForCommits(commits)
+
+	for _, change := range model.editQueue {
+		if change.NewMessage != "" {
+			t.Fatalf("shorten should not modify drop/combine entries, got NewMessage = %q", change.NewMessage)
+		}
+	}
+}
+
+func TestMultilineMessagePrefix(t *testing.T) {
+	if got := multilineMessagePrefix("single line"); got != "" {
+		t.Fatalf("prefix for single line = %q, want empty", got)
+	}
+	if got := multilineMessagePrefix("subject\nbody"); got != "[2] " {
+		t.Fatalf("prefix for two lines = %q, want [2] ", got)
+	}
+	if got := multilineMessagePrefix("subject\n\n- a\n- b\n- c"); got != "[5] " {
+		t.Fatalf("prefix for five lines = %q, want [5] ", got)
+	}
+}
+
+func TestHandleListKeyShortenUsesUppercaseX(t *testing.T) {
+	hash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	commits := []gitops.CommitInfo{{Hash: hash, Message: "subject\n- detail"}}
+	items := make([]list.Item, 1)
+	items[0] = commitItem{commit: commits[0]}
+
+	m := Model{
+		commits: commits,
+		list:    list.New(items, commitDelegate{}, 80, 20),
+		keys:    defaultKeyMap(),
+		options: Options{PlainView: true},
+	}
+
+	updated, _ := m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	m = updated.(Model)
+
+	if len(m.editQueue) != 1 {
+		t.Fatalf("editQueue len = %d, want 1", len(m.editQueue))
+	}
+	if m.editQueue[0].NewMessage != "subject" {
+		t.Fatalf("NewMessage = %q, want subject", m.editQueue[0].NewMessage)
+	}
+
+	m = Model{
+		commits: commits,
+		list:    list.New(items, commitDelegate{}, 80, 20),
+		keys:    defaultKeyMap(),
+		options: Options{PlainView: true},
+	}
+	updated, _ = m.handleListKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	m = updated.(Model)
+	if len(m.editQueue) != 0 {
+		t.Fatalf("editQueue len after lowercase x = %d, want 0", len(m.editQueue))
+	}
+}
+
+func TestRenderCleanCommitShowsMultilinePrefix(t *testing.T) {
+	commit := gitops.CommitInfo{
+		Hash:       plumbing.NewHash("1111111111111111111111111111111111111111"),
+		ShortHash:  "1111111",
+		AuthorName: "Jan",
+		AuthorDate: time.Date(2024, 1, 2, 3, 4, 0, 0, time.UTC),
+		Message:    "subject\n\n- detail",
+	}
+
+	oldLocal := time.Local
+	t.Cleanup(func() { time.Local = oldLocal })
+	time.Local = time.UTC
+
+	line := renderCleanCommit(commit, nil, foldDisplay{}, 120, false, "", 0, false, false, true)
+	if !strings.Contains(line, "[3] ") {
+		t.Fatalf("clean line missing multiline prefix: %q", line)
+	}
+	if !strings.Contains(line, "[3] subject") {
+		t.Fatalf("clean line should render prefix before subject: %q", line)
+	}
+}

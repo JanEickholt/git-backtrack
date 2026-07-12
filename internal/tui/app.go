@@ -383,6 +383,25 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case key.Matches(msg, m.keys.Shorten):
+		if len(m.commits) == 0 {
+			return m, nil
+		}
+		selectedCommits := m.selectedCommitInfos()
+		if len(selectedCommits) > 0 {
+			m.applyWithUndo(func() {
+				m.shortenMessageForCommits(selectedCommits)
+			})
+			return m, nil
+		}
+		idx := m.list.Index()
+		if idx >= 0 && idx < len(m.commits) {
+			m.applyWithUndo(func() {
+				m.shortenMessageForCommits([]gitops.CommitInfo{m.commits[idx]})
+			})
+		}
+		return m, nil
+
 	case key.Matches(msg, m.keys.Refresh):
 		m.refresh()
 		return m, nil
@@ -1933,6 +1952,7 @@ func (m Model) renderListFooter(selectedCount int) string {
 	if idx := m.list.Index(); idx >= 0 && idx < len(m.commits) && hasTimeAnomaly(m.commits[idx], m.commits, m.editMap) {
 		actions = append(actions, footerAction{key: "T", label: "fix time"})
 	}
+	actions = append(actions, footerAction{key: "X", label: "shorten"})
 	if len(m.undoStack) > 0 {
 		actions = append(actions, footerAction{key: "u", label: "undo"})
 	}
@@ -2485,6 +2505,7 @@ func renderCommitSuffix(change *gitops.ForgeChange, hasTimeWarning bool, highlig
 func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, fold foldDisplay, width int, highlight bool, suffix string, suffixWidth int, showTimezone bool, showEmail bool, showLineDiffs bool) string {
 	name := gitops.FormatCommitAuthorIdentity(original.AuthorName, original.AuthorEmail, showEmail)
 	date := formatCommitTime(original.AuthorDate, showTimezone)
+	fullMsg := original.Message
 	msg := strings.Split(original.Message, "\n")[0]
 	hashColor := lipgloss.Color("14")
 	nameColor := lipgloss.Color("12")
@@ -2516,9 +2537,13 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 			}
 			if change.NewMessage != "" {
 				msg = strings.Split(change.NewMessage, "\n")[0]
+				fullMsg = change.NewMessage
 			}
 		}
 	}
+
+	prefix := multilineMessagePrefix(fullMsg)
+	prefixWidth := len(prefix)
 
 	bg := lipgloss.Color("237")
 	hashStyle := lipgloss.NewStyle().Foreground(hashColor).Bold(true)
@@ -2555,7 +2580,7 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 		statsWidth := len(addStr) + 1 + len(delStr)
 		staticWidth += statsWidth + 1
 	}
-	msg = truncateForWidth(msg, width-staticWidth-suffixWidth)
+	msg = truncateForWidth(msg, width-staticWidth-suffixWidth-prefixWidth)
 
 	sep := sepStyle.Render(" ")
 	line := hashStyle.Render(original.ShortHash) + sep +
@@ -2564,11 +2589,14 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 	if showLineDiffs {
 		line += addStyle.Render(addStr) + sep + delStyle.Render(delStr) + sep
 	}
+	if prefix != "" {
+		line += statusStyle.Render(prefix)
+	}
 	line += msgStyle.Render(msg)
 
 	if highlight {
 		line += suffix
-		lineLen := staticWidth + len(msg) + suffixWidth
+		lineLen := staticWidth + prefixWidth + len(msg) + suffixWidth
 		if width > lineLen {
 			line += sepStyle.Render(strings.Repeat(" ", width-lineLen))
 		}
@@ -2579,9 +2607,13 @@ func renderCleanCommit(original gitops.CommitInfo, change *gitops.ForgeChange, f
 }
 
 func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.Color, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool, showLineDiffs bool) string {
+	fullMsg := original.Message
 	msg := strings.Split(original.Message, "\n")[0]
 	date := formatCommitTime(original.AuthorDate, showTimezone)
 	name := gitops.FormatCommitAuthor(tag+gitops.FormatCommitAuthorIdentity(original.AuthorName, original.AuthorEmail, showEmail), authorWidth)
+
+	prefix := multilineMessagePrefix(fullMsg)
+	prefixWidth := len(prefix)
 
 	bg := lipgloss.Color("237")
 	hashStyle := lipgloss.NewStyle().Foreground(color).Bold(true)
@@ -2614,7 +2646,7 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 	if showLineDiffs {
 		staticWidth += statWidth + 1 + statWidth + 2
 	}
-	availableForMsg := width - staticWidth - suffixWidth
+	availableForMsg := width - staticWidth - suffixWidth - prefixWidth
 	msg = truncateForWidth(msg, availableForMsg)
 
 	sep := sepStyle.Render("  ")
@@ -2623,11 +2655,14 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 	if showLineDiffs {
 		line += addStyle.Render(addStr) + statSep + delStyle.Render(delStr) + sep
 	}
+	if prefix != "" {
+		line += statusStyle.Render(prefix)
+	}
 	line += textStyle.Render(msg)
 
 	if highlight {
 		line += suffix
-		lineLen := staticWidth + len(msg) + suffixWidth
+		lineLen := staticWidth + prefixWidth + len(msg) + suffixWidth
 		if width > lineLen {
 			line += sepStyle.Render(strings.Repeat(" ", width-lineLen))
 		}
@@ -2641,6 +2676,7 @@ func renderTaggedCommit(original gitops.CommitInfo, tag string, color lipgloss.C
 func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange, width int, highlight bool, suffix string, suffixWidth int, authorWidth int, statWidth int, showTimezone bool, showEmail bool, showLineDiffs bool) string {
 	name := gitops.FormatCommitAuthorIdentity(original.AuthorName, original.AuthorEmail, showEmail)
 	date := formatCommitTime(original.AuthorDate, showTimezone)
+	fullMsg := original.Message
 	msg := strings.Split(original.Message, "\n")[0]
 
 	if change.NewAuthor != nil {
@@ -2651,7 +2687,11 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	}
 	if change.NewMessage != "" {
 		msg = strings.Split(change.NewMessage, "\n")[0]
+		fullMsg = change.NewMessage
 	}
+
+	prefix := multilineMessagePrefix(fullMsg)
+	prefixWidth := len(prefix)
 
 	bg := lipgloss.Color("237")
 	hashStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
@@ -2691,7 +2731,7 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	if showLineDiffs {
 		staticWidth += statWidth + 1 + statWidth + 2
 	}
-	availableForMsg := width - staticWidth - suffixWidth
+	availableForMsg := width - staticWidth - suffixWidth - prefixWidth
 	msg = truncateForWidth(msg, availableForMsg)
 
 	sep := sepStyle.Render("  ")
@@ -2700,11 +2740,14 @@ func renderModifiedCommit(original gitops.CommitInfo, change *gitops.ForgeChange
 	if showLineDiffs {
 		line += addPart + statSep + delPart + sep
 	}
+	if prefix != "" {
+		line += statusStyle.Render(prefix)
+	}
 	line += msgStyle.Render(msg)
 
 	if highlight {
 		line += suffix
-		lineLen := staticWidth + len(msg) + suffixWidth
+		lineLen := staticWidth + prefixWidth + len(msg) + suffixWidth
 		if width > lineLen {
 			line += sepStyle.Render(strings.Repeat(" ", width-lineLen))
 		}
@@ -2726,6 +2769,14 @@ func truncateForWidth(value string, width int) string {
 		return value[:width]
 	}
 	return value[:width-3] + "..."
+}
+
+func multilineMessagePrefix(msg string) string {
+	if !strings.Contains(msg, "\n") {
+		return ""
+	}
+	lines := strings.Count(msg, "\n") + 1
+	return fmt.Sprintf("[%d] ", lines)
 }
 
 type commitItem struct {
