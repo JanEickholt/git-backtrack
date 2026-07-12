@@ -3,6 +3,7 @@ package tool
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,30 @@ func TestRunListOutputsJSON(t *testing.T) {
 	}
 	if len(response.Commits) != 1 || response.Commits[0].Subject != "hello" {
 		t.Fatalf("commits = %+v, want hello commit", response.Commits)
+	}
+}
+
+func TestRunListAcceptsPositionalLimitBeforeFlags(t *testing.T) {
+	dir := initGitRepo(t)
+	for i := 0; i < 7; i++ {
+		commitFile(t, dir, "file.txt", strings.Repeat("x", i+1)+"\n", fmt.Sprintf("commit %d", i))
+	}
+
+	var stdout bytes.Buffer
+	status := Run([]string{"list", "--path", dir, "--json", "2", "--compact"}, &stdout, &bytes.Buffer{})
+	if status != 0 {
+		t.Fatalf("status = %d, output = %s", status, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "\n  ") {
+		t.Fatalf("output was not compact: %q", stdout.String())
+	}
+
+	var response ListResponse
+	if err := json.Unmarshal(stdout.Bytes(), &response); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if !response.OK || len(response.Commits) != 2 || response.Total != 7 || response.Limit != 2 || response.Remaining != 5 || !response.Truncated {
+		t.Fatalf("response = %+v, want compact positional limit window", response)
 	}
 }
 

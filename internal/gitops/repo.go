@@ -69,6 +69,49 @@ func (r *Repository) ListCommitsFromRefWithStats(refName string, includeStats bo
 	return commits, nil
 }
 
+func (r *Repository) ListCommitsFromRefWindowWithStats(refName string, includeStats bool, limit int, offset int) ([]CommitInfo, error) {
+	if limit <= 0 && offset <= 0 {
+		return r.ListCommitsFromRefWithStats(refName, includeStats)
+	}
+
+	args := []string{"--topo-order"}
+	if offset > 0 {
+		args = append(args, "--skip="+strconv.Itoa(offset))
+	}
+	if limit > 0 {
+		args = append(args, "--max-count="+strconv.Itoa(limit))
+	}
+	args = append(args, refName)
+
+	commits, err := r.listCommitInfoFromGitPreservingOrder(includeStats, args...)
+	if err != nil {
+		return nil, err
+	}
+
+	branchName := ""
+	if strings.HasPrefix(refName, "refs/heads/") {
+		branchName = strings.TrimPrefix(refName, "refs/heads/")
+	}
+	r.markUnpushedCommits(commits, branchName)
+
+	return commits, nil
+}
+
+func (r *Repository) CountCommitsFromRef(refName string) (int, error) {
+	if err := r.Reload(); err != nil {
+		return 0, err
+	}
+	output, err := r.gitOutput("rev-list", "--count", refName)
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(strings.TrimSpace(output))
+	if err != nil {
+		return 0, fmt.Errorf("parse commit count: %w", err)
+	}
+	return count, nil
+}
+
 func (r *Repository) ListAllCommitsWithGraph() ([]CommitInfo, *Graph, error) {
 	return r.ListAllCommitsWithGraphOrder(DefaultGraphOrder())
 }
@@ -156,6 +199,14 @@ func (r *Repository) listCommitsWithGraphAndStats(order GraphOrder, includeStats
 }
 
 func (r *Repository) listCommitInfoFromGit(includeStats bool, refArgs ...string) ([]CommitInfo, error) {
+	return r.listCommitInfoFromGitSorted(includeStats, true, refArgs...)
+}
+
+func (r *Repository) listCommitInfoFromGitPreservingOrder(includeStats bool, refArgs ...string) ([]CommitInfo, error) {
+	return r.listCommitInfoFromGitSorted(includeStats, false, refArgs...)
+}
+
+func (r *Repository) listCommitInfoFromGitSorted(includeStats bool, sortByAuthorDate bool, refArgs ...string) ([]CommitInfo, error) {
 	if err := r.Reload(); err != nil {
 		return nil, err
 	}
@@ -175,9 +226,11 @@ func (r *Repository) listCommitInfoFromGit(includeStats bool, refArgs ...string)
 	}
 
 	commits := parseCommitInfoLog(output, includeStats)
-	sort.Slice(commits, func(i, j int) bool {
-		return commits[i].AuthorDate.After(commits[j].AuthorDate)
-	})
+	if sortByAuthorDate {
+		sort.Slice(commits, func(i, j int) bool {
+			return commits[i].AuthorDate.After(commits[j].AuthorDate)
+		})
+	}
 	return commits, nil
 }
 

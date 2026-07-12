@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 const planVersion = 1
 const minHashPrefixLength = 7
+const defaultListLimit = 5
 
 type Plan struct {
 	Version      int             `json:"version"`
@@ -59,17 +61,22 @@ type Commit struct {
 	AuthorDate  string   `json:"author_date"`
 	Subject     string   `json:"subject"`
 	Message     string   `json:"message"`
-	Additions   int      `json:"additions"`
-	Deletions   int      `json:"deletions"`
+	Additions   *int     `json:"additions,omitempty"`
+	Deletions   *int     `json:"deletions,omitempty"`
 }
 
 type ListResponse struct {
-	OK      bool     `json:"ok"`
-	Ref     string   `json:"ref"`
-	Head    string   `json:"head"`
-	Branch  string   `json:"branch,omitempty"`
-	Commits []Commit `json:"commits"`
-	Errors  []Error  `json:"errors,omitempty"`
+	OK        bool     `json:"ok"`
+	Ref       string   `json:"ref"`
+	Head      string   `json:"head"`
+	Branch    string   `json:"branch,omitempty"`
+	Total     int      `json:"total"`
+	Limit     int      `json:"limit,omitempty"`
+	Offset    int      `json:"offset,omitempty"`
+	Remaining int      `json:"remaining,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
+	Commits   []Commit `json:"commits"`
+	Errors    []Error  `json:"errors,omitempty"`
 }
 
 type ValidateResponse struct {
@@ -215,16 +222,20 @@ func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
 }
 
 func runList(args []string, stdout io.Writer, stderr io.Writer) int {
+	args = normalizeListArgs(args)
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repoPath := fs.String("path", ".", "path to git repository")
 	refArg := fs.String("ref", "", "ref or branch to list, defaults to HEAD")
+	limit := fs.Int("limit", defaultListLimit, "maximum number of newest commits to return (0 or negative disables the limit)")
+	offset := fs.Int("offset", 0, "number of newest commits to skip before applying --limit (ignored unless > 0)")
+	all := fs.Bool("all", false, "return every reachable commit (overrides --limit)")
+	stats := fs.Bool("stats", false, "include additions/deletions per commit (omitted by default to keep responses small)")
 	_ = fs.Bool("json", true, "emit JSON")
 	compact := fs.Bool("compact", false, "emit JSON on a single line")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-
 	repo, err := gitops.Open(*repoPath)
 	if err != nil {
 		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}}, *compact)
@@ -235,14 +246,85 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("resolve_ref_failed", err.Error())}}, *compact)
 		return 1
 	}
-	commits, err := commitsForRef(repo, ref)
+	total, err := repo.CountCommitsFromRef(ref)
+	if err != nil {
+		writeJSON(stdout, ListResponse{OK: false, Ref: ref, Head: refHash, Errors: []Error{errorObject("count_commits_failed", err.Error())}}, *compact)
+		return 1
+	}
+
+	effectiveLimit, effectiveOffset, remaining, truncated := listWindow(total, *limit, *offset, *all)
+	commits, err := listCommitsForResponse(repo, ref, *stats, effectiveLimit, effectiveOffset, *all)
 	if err != nil {
 		writeJSON(stdout, ListResponse{OK: false, Ref: ref, Head: refHash, Errors: []Error{errorObject("list_commits_failed", err.Error())}}, *compact)
 		return 1
 	}
 
-	writeJSON(stdout, ListResponse{OK: true, Ref: ref, Head: refHash, Branch: branch, Commits: jsonCommits(commits)}, *compact)
+	writeJSON(stdout, ListResponse{OK: true, Ref: ref, Head: refHash, Branch: branch, Total: total, Limit: effectiveLimit, Offset: effectiveOffset, Remaining: remaining, Truncated: truncated, Commits: jsonCommits(commits, *stats)}, *compact)
 	return 0
+}
+
+func parsePositionalLimit(value string) (int, error) {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("positional limit %q is not an integer", value)
+	}
+	return parsed, nil
+}
+
+func normalizeListArgs(args []string) []string {
+	if hasListLimitFlag(args) {
+		return args
+	}
+	normalized := make([]string, 0, len(args)+1)
+	limitSet := false
+	for _, arg := range args {
+		if !limitSet && !strings.HasPrefix(arg, "-") {
+			if parsed, err := parsePositionalLimit(arg); err == nil {
+				normalized = append(normalized, "--limit", strconv.Itoa(parsed))
+				limitSet = true
+				continue
+			}
+		}
+		normalized = append(normalized, arg)
+	}
+	return normalized
+}
+
+func hasListLimitFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--limit" || arg == "-limit" || strings.HasPrefix(arg, "--limit=") || strings.HasPrefix(arg, "-limit=") {
+			return true
+		}
+	}
+	return false
+}
+
+func listWindow(total int, limit int, offset int, all bool) (effectiveLimit int, effectiveOffset int, remaining int, truncated bool) {
+	if all {
+		return 0, 0, 0, false
+	}
+	skip := 0
+	if offset > 0 {
+		skip = min(offset, total)
+		effectiveOffset = skip
+	}
+	visible := total - skip
+	capped := visible
+	if limit > 0 && visible > limit {
+		capped = limit
+		effectiveLimit = limit
+	}
+	remaining = total - skip - capped
+	truncated = remaining > 0
+	return effectiveLimit, effectiveOffset, remaining, truncated
+}
+
+func listCommitsForResponse(repo *gitops.Repository, ref string, includeStats bool, limit int, offset int, all bool) ([]gitops.CommitInfo, error) {
+	if all {
+		commits, _, err := repo.ListCommitsFromRefWithGraphOrderAndStats(ref, gitops.DefaultGraphOrder(), includeStats)
+		return commits, err
+	}
+	return repo.ListCommitsFromRefWindowWithStats(ref, includeStats, limit, offset)
 }
 
 func runValidate(args []string, stdout io.Writer, stderr io.Writer) int {
@@ -395,14 +477,14 @@ func toolHelp() HelpResponse {
 		Name:        "git-backtrack tool mode",
 		Description: "JSON interface for inspecting, validating, and applying git history rewrite plans without driving the TUI.",
 		Workflow: []string{
-			"Run list --json to discover the current ref, expected_head, and commit hashes.",
+			"Run list --json to discover the current ref, expected_head, and commit hashes. The newest 5 commits are returned by default; use --offset to paginate, --stats for additions/deletions, or --all (or --limit 0) when older commits are needed.",
 			"Create a version 1 plan using hash values from list output or unambiguous hash prefixes.",
 			"Run validate --plan plan.json --json and inspect ok/errors/resolved_operations.",
 			"Run apply --plan plan.json --json --yes only after validation succeeds and the user wants to rewrite history.",
 		},
 		Commands: []CommandHelp{
 			{Name: "help", Usage: "git-backtrack help --json", Description: "Print this machine-readable tool contract.", Flags: []string{"--json", "--compact"}},
-			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main]", Description: "List reachable commits for a ref and return current head metadata.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--json", "--compact"}},
+			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main] [--limit N] [--offset N] [--stats] [--all]", Description: "List reachable commits for a ref and return current head metadata. Defaults to the 5 newest commits; pass --offset to skip newer ones, --stats for additions/deletions, or --all / --limit 0 for every reachable commit.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--limit <n>", "--offset <n>", "--stats", "--all", "--json", "--compact"}},
 			{Name: "validate", Usage: "git-backtrack validate --path . --plan plan.json --json", Description: "Validate a rewrite plan and return normalized resolved operations.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--compact"}},
 			{Name: "apply", Usage: "git-backtrack apply --path . --plan plan.json --json --yes", Description: "Validate then apply a rewrite plan. Requires --yes and creates a backup for real rewrites.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--compact", "--yes"}},
 			{Name: "backups", Usage: "git-backtrack backups --path . --json", Description: "List all backtrack backup refs in the repository.", Flags: []string{"--path <repo>", "--json", "--compact"}},
@@ -435,7 +517,7 @@ func toolHelp() HelpResponse {
 			},
 		},
 		ResponseShapes: map[string]string{
-			"list":     "{ok, ref, head, branch, commits[], errors[]}",
+			"list":     "{ok, ref, head, branch, total, limit, offset, remaining, truncated, commits[], errors[]}",
 			"validate": "{ok, ref, head, resolved_operations[], warnings[], errors[]}",
 			"apply":    "{ok, ref, head, backup_ref, changed_refs, warnings[], errors[]}",
 			"backups":  "{ok, backups[{name, ref, created_at}], errors[]}",
@@ -927,14 +1009,14 @@ func readPlan(path string) (Plan, error) {
 	return plan, nil
 }
 
-func jsonCommits(commits []gitops.CommitInfo) []Commit {
+func jsonCommits(commits []gitops.CommitInfo, withStats bool) []Commit {
 	out := make([]Commit, len(commits))
 	for i, commit := range commits {
 		parents := make([]string, len(commit.Parents))
 		for j, parent := range commit.Parents {
 			parents[j] = strings.ToLower(parent.String())
 		}
-		out[i] = Commit{
+		entry := Commit{
 			Hash:        strings.ToLower(commit.Hash.String()),
 			ShortHash:   commit.ShortHash,
 			Parents:     parents,
@@ -943,9 +1025,14 @@ func jsonCommits(commits []gitops.CommitInfo) []Commit {
 			AuthorDate:  commit.AuthorDate.Format(time.RFC3339),
 			Subject:     strings.Split(commit.Message, "\n")[0],
 			Message:     commit.Message,
-			Additions:   commit.Additions,
-			Deletions:   commit.Deletions,
 		}
+		if withStats {
+			additions := commit.Additions
+			deletions := commit.Deletions
+			entry.Additions = &additions
+			entry.Deletions = &deletions
+		}
+		out[i] = entry
 	}
 	return out
 }
