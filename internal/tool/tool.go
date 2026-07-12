@@ -91,6 +91,26 @@ type ApplyResponse struct {
 	Errors      []Error           `json:"errors,omitempty"`
 }
 
+type BackupEntry struct {
+	Name      string `json:"name"`
+	Ref       string `json:"ref"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+type BackupsResponse struct {
+	OK      bool          `json:"ok"`
+	Backups []BackupEntry `json:"backups"`
+	Errors  []Error       `json:"errors,omitempty"`
+}
+
+type RestoreResponse struct {
+	OK           bool      `json:"ok"`
+	BackupRef    string    `json:"backup_ref,omitempty"`
+	RestoredRefs []string  `json:"restored_refs,omitempty"`
+	Warnings     []Warning `json:"warnings,omitempty"`
+	Errors       []Error   `json:"errors,omitempty"`
+}
+
 type HelpResponse struct {
 	OK                  bool              `json:"ok"`
 	Name                string            `json:"name"`
@@ -103,6 +123,7 @@ type HelpResponse struct {
 	ExamplePlan         Plan              `json:"example_plan"`
 	ResponseShapes      map[string]string `json:"response_shapes"`
 	ErrorCodes          []string          `json:"error_codes"`
+	WarningCodes        []string          `json:"warning_codes"`
 	SafetyNotes         []string          `json:"safety_notes"`
 	RecommendedSequence []string          `json:"recommended_sequence"`
 }
@@ -149,7 +170,7 @@ type validationResult struct {
 
 func IsCommand(name string) bool {
 	switch name {
-	case "help", "list", "validate", "apply":
+	case "help", "list", "validate", "apply", "backups", "restore":
 		return true
 	default:
 		return false
@@ -171,6 +192,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return runValidate(args[1:], stdout, stderr)
 	case "apply":
 		return runApply(args[1:], stdout, stderr)
+	case "backups":
+		return runBackups(args[1:], stdout, stderr)
+	case "restore":
+		return runRestore(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown tool command %q\n", args[0])
 		return 2
@@ -181,10 +206,11 @@ func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("help", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	_ = fs.Bool("json", true, "emit JSON")
+	compact := fs.Bool("compact", false, "emit JSON on a single line")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	writeJSON(stdout, toolHelp())
+	writeJSON(stdout, toolHelp(), *compact)
 	return 0
 }
 
@@ -194,27 +220,28 @@ func runList(args []string, stdout io.Writer, stderr io.Writer) int {
 	repoPath := fs.String("path", ".", "path to git repository")
 	refArg := fs.String("ref", "", "ref or branch to list, defaults to HEAD")
 	_ = fs.Bool("json", true, "emit JSON")
+	compact := fs.Bool("compact", false, "emit JSON on a single line")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	repo, err := gitops.Open(*repoPath)
 	if err != nil {
-		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}})
+		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}}, *compact)
 		return 1
 	}
 	ref, refHash, branch, err := resolveRef(repo, *refArg)
 	if err != nil {
-		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("resolve_ref_failed", err.Error())}})
+		writeJSON(stdout, ListResponse{OK: false, Errors: []Error{errorObject("resolve_ref_failed", err.Error())}}, *compact)
 		return 1
 	}
 	commits, err := commitsForRef(repo, ref)
 	if err != nil {
-		writeJSON(stdout, ListResponse{OK: false, Ref: ref, Head: refHash, Errors: []Error{errorObject("list_commits_failed", err.Error())}})
+		writeJSON(stdout, ListResponse{OK: false, Ref: ref, Head: refHash, Errors: []Error{errorObject("list_commits_failed", err.Error())}}, *compact)
 		return 1
 	}
 
-	writeJSON(stdout, ListResponse{OK: true, Ref: ref, Head: refHash, Branch: branch, Commits: jsonCommits(commits)})
+	writeJSON(stdout, ListResponse{OK: true, Ref: ref, Head: refHash, Branch: branch, Commits: jsonCommits(commits)}, *compact)
 	return 0
 }
 
@@ -224,12 +251,13 @@ func runValidate(args []string, stdout io.Writer, stderr io.Writer) int {
 	repoPath := fs.String("path", ".", "path to git repository")
 	planPath := fs.String("plan", "", "path to JSON plan")
 	_ = fs.Bool("json", true, "emit JSON")
+	compact := fs.Bool("compact", false, "emit JSON on a single line")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	result, status := validatePlanFromPath(*repoPath, *planPath)
-	writeJSON(stdout, ValidateResponse{OK: len(result.errors) == 0, Ref: result.ref, Head: result.head, ResolvedOperations: result.resolved, Warnings: result.warnings, Errors: result.errors})
+	writeJSON(stdout, ValidateResponse{OK: len(result.errors) == 0, Ref: result.ref, Head: result.head, ResolvedOperations: result.resolved, Warnings: result.warnings, Errors: result.errors}, *compact)
 	return status
 }
 
@@ -240,48 +268,123 @@ func runApply(args []string, stdout io.Writer, stderr io.Writer) int {
 	planPath := fs.String("plan", "", "path to JSON plan")
 	yes := fs.Bool("yes", false, "apply the history rewrite")
 	_ = fs.Bool("json", true, "emit JSON")
+	compact := fs.Bool("compact", false, "emit JSON on a single line")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
 	result, status := validatePlanFromPath(*repoPath, *planPath)
 	if status != 0 {
-		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: result.errors})
+		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: result.errors}, *compact)
 		return status
 	}
 	if !*yes {
 		result.errors = append(result.errors, errorObject("confirmation_required", "apply requires --yes"))
-		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: result.errors})
+		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: result.errors}, *compact)
 		return 1
 	}
 	if len(result.changes) == 0 {
-		writeJSON(stdout, ApplyResponse{OK: true, Ref: result.ref, Head: result.head, ChangedRefs: map[string]string{}, Warnings: result.warnings})
+		writeJSON(stdout, ApplyResponse{OK: true, Ref: result.ref, Head: result.head, ChangedRefs: map[string]string{}, Warnings: result.warnings}, *compact)
 		return 0
 	}
 
 	repo, err := gitops.Open(*repoPath)
 	if err != nil {
-		writeJSON(stdout, ApplyResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}})
+		writeJSON(stdout, ApplyResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}}, *compact)
 		return 1
 	}
 	if err := ensureRefCheckedOut(repo, result.ref, result.head); err != nil {
-		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: []Error{errorObject("ref_not_checked_out", err.Error())}})
+		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: []Error{errorObject("ref_not_checked_out", err.Error())}}, *compact)
 		return 1
 	}
 
 	rewriter := gitops.NewHistoryRewriter(repo)
 	backupRef, err := rewriter.CreateFullBackup()
 	if err != nil {
-		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: []Error{errorObject("backup_failed", err.Error())}})
+		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, Warnings: result.warnings, Errors: []Error{errorObject("backup_failed", err.Error())}}, *compact)
 		return 1
 	}
 	rewriteResult, err := rewriter.ApplyChanges(result.changes)
 	if err != nil {
-		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, BackupRef: backupRef, Warnings: result.warnings, Errors: []Error{errorObject("apply_failed", err.Error())}})
+		writeJSON(stdout, ApplyResponse{OK: false, Ref: result.ref, Head: result.head, BackupRef: backupRef, Warnings: result.warnings, Errors: []Error{errorObject("apply_failed", err.Error())}}, *compact)
 		return 1
 	}
 
-	writeJSON(stdout, ApplyResponse{OK: true, Ref: result.ref, Head: result.head, BackupRef: backupRef, ChangedRefs: changedRefsJSON(rewriteResult.ChangedRefs), Warnings: result.warnings})
+	writeJSON(stdout, ApplyResponse{OK: true, Ref: result.ref, Head: result.head, BackupRef: backupRef, ChangedRefs: changedRefsJSON(rewriteResult.ChangedRefs), Warnings: result.warnings}, *compact)
+	return 0
+}
+
+func runBackups(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("backups", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repoPath := fs.String("path", ".", "path to git repository")
+	_ = fs.Bool("json", true, "emit JSON")
+	compact := fs.Bool("compact", false, "emit JSON on a single line")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	repo, err := gitops.Open(*repoPath)
+	if err != nil {
+		writeJSON(stdout, BackupsResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}}, *compact)
+		return 1
+	}
+	rewriter := gitops.NewHistoryRewriter(repo)
+	backups, err := rewriter.ListBackups()
+	if err != nil {
+		writeJSON(stdout, BackupsResponse{OK: false, Errors: []Error{errorObject("list_backups_failed", err.Error())}}, *compact)
+		return 1
+	}
+
+	writeJSON(stdout, BackupsResponse{OK: true, Backups: backupEntries(backups)}, *compact)
+	return 0
+}
+
+func runRestore(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repoPath := fs.String("path", ".", "path to git repository")
+	yes := fs.Bool("yes", false, "confirm history rewrite")
+	backupArg := fs.String("backup", "", "backup name or full ref to restore")
+	refArg := fs.String("ref", "", "branch to checkout after restore")
+	_ = fs.Bool("json", true, "emit JSON")
+	compact := fs.Bool("compact", false, "emit JSON on a single line")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if !*yes {
+		writeJSON(stdout, RestoreResponse{OK: false, Errors: []Error{errorObject("confirmation_required", "restore requires --yes")}}, *compact)
+		return 1
+	}
+
+	repo, err := gitops.Open(*repoPath)
+	if err != nil {
+		writeJSON(stdout, RestoreResponse{OK: false, Errors: []Error{errorObject("open_repository_failed", err.Error())}}, *compact)
+		return 1
+	}
+	rewriter := gitops.NewHistoryRewriter(repo)
+
+	backupPrefix, backupErr := resolveBackupPrefix(rewriter, *backupArg)
+	if backupErr != nil {
+		writeJSON(stdout, RestoreResponse{OK: false, Errors: []Error{errorObject(backupErr.code, backupErr.message)}}, *compact)
+		return 1
+	}
+
+	restoredRefs, err := rewriter.RestoreFromBackup(backupPrefix)
+	if err != nil {
+		writeJSON(stdout, RestoreResponse{OK: false, BackupRef: backupPrefix, Errors: []Error{errorObject("restore_failed", err.Error())}}, *compact)
+		return 1
+	}
+
+	if *refArg != "" {
+		if err := repo.SwitchBranch(*refArg); err != nil {
+			writeJSON(stdout, RestoreResponse{OK: false, BackupRef: backupPrefix, RestoredRefs: restoredRefs, Errors: []Error{errorObject("ref_not_checked_out", err.Error())}}, *compact)
+			return 1
+		}
+	}
+
+	writeJSON(stdout, RestoreResponse{OK: true, BackupRef: backupPrefix, RestoredRefs: restoredRefs}, *compact)
 	return 0
 }
 
@@ -298,10 +401,12 @@ func toolHelp() HelpResponse {
 			"Run apply --plan plan.json --json --yes only after validation succeeds and the user wants to rewrite history.",
 		},
 		Commands: []CommandHelp{
-			{Name: "help", Usage: "git-backtrack help --json", Description: "Print this machine-readable tool contract.", Flags: []string{"--json"}},
-			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main]", Description: "List reachable commits for a ref and return current head metadata.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--json"}},
-			{Name: "validate", Usage: "git-backtrack validate --path . --plan plan.json --json", Description: "Validate a rewrite plan and return normalized resolved operations.", Flags: []string{"--path <repo>", "--plan <file>", "--json"}},
-			{Name: "apply", Usage: "git-backtrack apply --path . --plan plan.json --json --yes", Description: "Validate then apply a rewrite plan. Requires --yes and creates a backup for real rewrites.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--yes"}},
+			{Name: "help", Usage: "git-backtrack help --json", Description: "Print this machine-readable tool contract.", Flags: []string{"--json", "--compact"}},
+			{Name: "list", Usage: "git-backtrack list --path . --json [--ref main]", Description: "List reachable commits for a ref and return current head metadata.", Flags: []string{"--path <repo>", "--ref <ref-or-branch>", "--json", "--compact"}},
+			{Name: "validate", Usage: "git-backtrack validate --path . --plan plan.json --json", Description: "Validate a rewrite plan and return normalized resolved operations.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--compact"}},
+			{Name: "apply", Usage: "git-backtrack apply --path . --plan plan.json --json --yes", Description: "Validate then apply a rewrite plan. Requires --yes and creates a backup for real rewrites.", Flags: []string{"--path <repo>", "--plan <file>", "--json", "--compact", "--yes"}},
+			{Name: "backups", Usage: "git-backtrack backups --path . --json", Description: "List all backtrack backup refs in the repository.", Flags: []string{"--path <repo>", "--json", "--compact"}},
+			{Name: "restore", Usage: "git-backtrack restore --path . --json --yes [--backup <name-or-ref>] [--ref <branch>]", Description: "Restore branch refs from a backup. Requires --yes. Defaults to the latest backup when --backup is omitted.", Flags: []string{"--path <repo>", "--json", "--compact", "--yes", "--backup <name-or-ref>", "--ref <branch>"}},
 		},
 		HashRules: HashRules{
 			MinimumPrefixLength: minHashPrefixLength,
@@ -333,12 +438,15 @@ func toolHelp() HelpResponse {
 			"list":     "{ok, ref, head, branch, commits[], errors[]}",
 			"validate": "{ok, ref, head, resolved_operations[], warnings[], errors[]}",
 			"apply":    "{ok, ref, head, backup_ref, changed_refs, warnings[], errors[]}",
+			"backups":  "{ok, backups[{name, ref, created_at}], errors[]}",
+			"restore":  "{ok, backup_ref, restored_refs[], warnings[], errors[]}",
 		},
 		ErrorCodes: []string{
 			"ambiguous_hash",
 			"apply_failed",
 			"author_identity_incomplete",
 			"backup_failed",
+			"backup_not_found",
 			"confirmation_required",
 			"duplicate_operation",
 			"expected_head_mismatch",
@@ -348,22 +456,31 @@ func toolHelp() HelpResponse {
 			"hash_not_reachable",
 			"invalid_author_date",
 			"invalid_hash",
+			"list_backups_failed",
 			"merge_replay_unsupported",
 			"missing_expected_head",
 			"missing_hash",
 			"missing_plan",
 			"missing_ref",
+			"no_backups_found",
 			"ref_not_checked_out",
 			"resolve_ref_failed",
+			"restore_failed",
 			"root_replay_unsupported",
 			"unknown_operation",
 			"unsupported_plan_version",
+		},
+		WarningCodes: []string{
+			"date_after_child",
+			"date_before_parent",
+			"empty_edit",
 		},
 		SafetyNotes: []string{
 			"apply refuses to run without --yes.",
 			"apply validates the plan before rewriting history.",
 			"apply requires the plan ref to be the checked-out HEAD ref.",
 			"apply creates refs/backtrack-backup/* before real rewrites.",
+			"restore refuses to run without --yes.",
 			"No-op plans return ok without creating a backup.",
 		},
 		RecommendedSequence: []string{
@@ -372,6 +489,8 @@ func toolHelp() HelpResponse {
 			"write plan.json using ref/head/hash data from list output",
 			"git-backtrack validate --path . --plan plan.json --json",
 			"git-backtrack apply --path . --plan plan.json --json --yes",
+			"git-backtrack backups --path . --json",
+			"git-backtrack restore --path . --json --yes --backup <name>",
 		},
 	}
 }
@@ -443,6 +562,10 @@ func validatePlan(repo *gitops.Repository, plan Plan) validationResult {
 	}
 
 	result.errors = append(result.errors, validateReplayLimits(changes, commits)...)
+	if len(result.errors) > 0 {
+		return result
+	}
+	result.warnings = append(result.warnings, validateDateOrdering(plan, commits, resolver)...)
 	return result
 }
 
@@ -659,6 +782,79 @@ func validateReplayLimits(changes []gitops.ForgeChange, commits []gitops.CommitI
 	return errorsOut
 }
 
+// validateDateOrdering inspects edited commits whose author_date was changed
+// and emits informational warnings when the new date is earlier than a parent
+// commit's author_date, or later than a child commit's author_date. The
+// commits slice is ordered newest-first per ListCommitsFromRefWithGraph.
+func validateDateOrdering(plan Plan, commits []gitops.CommitInfo, resolver hashResolver) []Warning {
+	edits := make(map[string]time.Time)
+	for _, op := range plan.Operations {
+		if strings.ToLower(op.Op) != "edit" || op.AuthorDate == nil {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, *op.AuthorDate)
+		if err != nil {
+			continue
+		}
+		hash, errs := resolver.resolve(op.Hash)
+		if len(errs) > 0 || hash == "" {
+			continue
+		}
+		edits[strings.ToLower(hash)] = parsed
+	}
+	if len(edits) == 0 {
+		return nil
+	}
+
+	commitByHash := make(map[string]gitops.CommitInfo, len(commits))
+	for _, commit := range commits {
+		commitByHash[strings.ToLower(commit.Hash.String())] = commit
+	}
+
+	seen := make(map[string]bool)
+	var warnings []Warning
+	for hash, newDate := range edits {
+		commit, ok := commitByHash[hash]
+		if !ok {
+			continue
+		}
+		for _, parentHash := range commit.Parents {
+			parentKey := strings.ToLower(parentHash.String())
+			parent, ok := commitByHash[parentKey]
+			if !ok {
+				continue
+			}
+			if newDate.Before(parent.AuthorDate) {
+				key := "date_before_parent:" + hash
+				if !seen[key] {
+					seen[key] = true
+					warnings = append(warnings, Warning{Code: "date_before_parent", Message: "edited author_date is earlier than parent commit's author_date", Hash: hash})
+				}
+			}
+		}
+		for _, candidate := range commits {
+			matches := false
+			for _, parentHash := range candidate.Parents {
+				if strings.ToLower(parentHash.String()) == hash {
+					matches = true
+					break
+				}
+			}
+			if !matches {
+				continue
+			}
+			if newDate.After(candidate.AuthorDate) {
+				key := "date_after_child:" + hash
+				if !seen[key] {
+					seen[key] = true
+					warnings = append(warnings, Warning{Code: "date_after_child", Message: "edited author_date is later than child commit's author_date", Hash: hash})
+				}
+			}
+		}
+	}
+	return warnings
+}
+
 func seenOperation(seen map[string]string, hash string, op string) string {
 	if previous := seen[hash]; previous != "" {
 		return previous
@@ -762,9 +958,72 @@ func changedRefsJSON(refs map[plumbing.Hash]plumbing.Hash) map[string]string {
 	return out
 }
 
-func writeJSON(w io.Writer, value any) {
+const backupRefPrefix = "refs/backtrack-backup/"
+
+func backupEntries(backups []string) []BackupEntry {
+	entries := make([]BackupEntry, 0, len(backups))
+	for _, backup := range backups {
+		name := strings.TrimPrefix(backup, backupRefPrefix)
+		entry := BackupEntry{Name: name, Ref: backup}
+		if parsed, err := time.Parse("20060102-150405", name); err == nil {
+			entry.CreatedAt = parsed.UTC().Format(time.RFC3339)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+type backupResolveError struct {
+	code    string
+	message string
+}
+
+func (e *backupResolveError) Error() string {
+	return e.message
+}
+
+// resolveBackupPrefix resolves a user-supplied backup identifier (bare name,
+// full ref, or full ref with branch suffix) to the canonical backup prefix
+// refs/backtrack-backup/<name> and validates it exists in the repository.
+func resolveBackupPrefix(rewriter *gitops.HistoryRewriter, backupArg string) (string, *backupResolveError) {
+	backups, err := rewriter.ListBackups()
+	if err != nil {
+		return "", &backupResolveError{code: "list_backups_failed", message: err.Error()}
+	}
+	if len(backups) == 0 {
+		return "", &backupResolveError{code: "no_backups_found", message: "no backtrack backups exist in this repository"}
+	}
+
+	backupSet := make(map[string]bool, len(backups))
+	for _, backup := range backups {
+		backupSet[backup] = true
+	}
+
+	if backupArg == "" {
+		latest, err := rewriter.LatestBackup()
+		if err != nil {
+			return "", &backupResolveError{code: "no_backups_found", message: err.Error()}
+		}
+		return latest, nil
+	}
+
+	name := strings.TrimSpace(backupArg)
+	name = strings.TrimPrefix(name, backupRefPrefix)
+	if idx := strings.Index(name, "/"); idx > 0 {
+		name = name[:idx]
+	}
+	prefix := backupRefPrefix + name
+	if !backupSet[prefix] {
+		return "", &backupResolveError{code: "backup_not_found", message: fmt.Sprintf("backup %q not found", backupArg)}
+	}
+	return prefix, nil
+}
+
+func writeJSON(w io.Writer, value any, compact bool) {
 	encoder := json.NewEncoder(w)
-	encoder.SetIndent("", "  ")
+	if !compact {
+		encoder.SetIndent("", "  ")
+	}
 	_ = encoder.Encode(value)
 }
 

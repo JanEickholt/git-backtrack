@@ -52,8 +52,6 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 	for _, change := range changes {
 		changeMap[change.OriginalHash] = change
 	}
-	signingConfig, _ := hr.repo.GetSigningConfig()
-	useSigning := signingConfig != nil && signingConfig.SignCommits
 	combineGroups, combineMembers, err := buildCombineGroups(changes, commits)
 	if err != nil {
 		return nil, err
@@ -103,7 +101,12 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 
 		change, hasChange := changeMap[commit.Hash]
 		if group, ok := combineGroups[commit.Hash]; ok {
-			if err := hr.replayCombinedCommit(tmpDir, group, commitByHash, change, hasChange, useSigning); err != nil {
+			anchorCommit := commitByHash[group.Anchor]
+			if anchorCommit == nil {
+				anchorCommit = commit
+			}
+			combineUseSigning, _, _ := hr.repo.ShouldSignForAuthor(anchorCommit.Author.Email)
+			if err := hr.replayCombinedCommit(tmpDir, group, commitByHash, change, hasChange, combineUseSigning); err != nil {
 				return nil, err
 			}
 
@@ -112,7 +115,7 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 				return nil, err
 			}
 			currentHash = plumbing.NewHash(strings.TrimSpace(newHashStr))
-			if useSigning {
+			if combineUseSigning {
 				signedHash, err := hr.signReplayCommit(tmpDir, currentHash)
 				if err != nil {
 					return nil, err
@@ -130,6 +133,7 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 			continue
 		}
 
+		replayUseSigning, _, _ := hr.repo.ShouldSignForAuthor(commit.Author.Email)
 		if err := hr.runGit(tmpDir, "cherry-pick", "--no-commit", commit.Hash.String()); err != nil {
 			return nil, fmt.Errorf("failed to replay commit %s: %w", commit.Hash.String()[:7], err)
 		}
@@ -140,7 +144,7 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 		}
 
 		env := replayCommitEnv(commit, change, hasChange)
-		if err := hr.runGitEnv(tmpDir, env, replayCommitArgs(change, hasChange, messageFile, useSigning)...); err != nil {
+		if err := hr.runGitEnv(tmpDir, env, replayCommitArgs(change, hasChange, messageFile, replayUseSigning)...); err != nil {
 			return nil, fmt.Errorf("failed to create replayed commit %s: %w", commit.Hash.String()[:7], err)
 		}
 
@@ -149,7 +153,7 @@ func (hr *HistoryRewriter) applyChangesWithDrop(changes []ForgeChange) (*Rewrite
 			return nil, err
 		}
 		currentHash = plumbing.NewHash(strings.TrimSpace(newHashStr))
-		if useSigning {
+		if replayUseSigning {
 			signedHash, err := hr.signReplayCommit(tmpDir, currentHash)
 			if err != nil {
 				return nil, err

@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Jan/git-backtrack/internal/gitops"
-	"github.com/Jan/git-backtrack/internal/mcp"
 	"github.com/Jan/git-backtrack/internal/tool"
 	"github.com/Jan/git-backtrack/internal/tui"
 )
@@ -23,14 +22,6 @@ var (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "auth" {
 		os.Exit(runAuth(os.Args[2:], os.Stdout, os.Stderr))
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "mcp" {
-		if err := mcp.Serve(os.Stdin, os.Stdout, os.Stderr); err != nil {
-			fmt.Fprintf(os.Stderr, "MCP server error: %v\n", err)
-			os.Exit(1)
-		}
-		return
 	}
 
 	if len(os.Args) > 1 && tool.IsCommand(os.Args[1]) {

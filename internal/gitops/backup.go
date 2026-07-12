@@ -54,34 +54,44 @@ func (hr *HistoryRewriter) CreateFullBackup() (string, error) {
 	return backupPrefix, nil
 }
 
-func (hr *HistoryRewriter) RestoreFromBackup(backupPrefix string) error {
+// RestoreFromBackup restores branch refs from the given backup prefix and
+// returns the canonical branch refs (refs/heads/<branch>) that were restored.
+func (hr *HistoryRewriter) RestoreFromBackup(backupPrefix string) ([]string, error) {
 	refs, err := hr.repo.repo.References()
 	if err != nil {
-		return fmt.Errorf("failed to list references: %w", err)
+		return nil, fmt.Errorf("failed to list references: %w", err)
 	}
 
 	restoreRefs := make(map[plumbing.ReferenceName]plumbing.Hash)
+	restoreOrder := make([]plumbing.ReferenceName, 0)
 
 	if err := refs.ForEach(func(ref *plumbing.Reference) error {
 		name := ref.Name().String()
 		if len(name) > len(backupPrefix) && name[:len(backupPrefix)] == backupPrefix {
 			branchName := name[len(backupPrefix)+1:]
 			originalName := plumbing.ReferenceName("refs/heads/" + branchName)
+			if _, exists := restoreRefs[originalName]; !exists {
+				restoreOrder = append(restoreOrder, originalName)
+			}
 			restoreRefs[originalName] = ref.Hash()
 		}
 		return nil
 	}); err != nil {
-		return err
+		return nil, err
 	}
 
+	restored := make([]string, 0, len(restoreOrder))
 	for refName, hash := range restoreRefs {
 		newRef := plumbing.NewHashReference(refName, hash)
 		if err := hr.repo.repo.Storer.SetReference(newRef); err != nil {
-			return fmt.Errorf("failed to restore reference %s: %w", refName, err)
+			return restored, fmt.Errorf("failed to restore reference %s: %w", refName, err)
 		}
 	}
+	for _, refName := range restoreOrder {
+		restored = append(restored, refName.String())
+	}
 
-	return nil
+	return restored, nil
 }
 
 func (hr *HistoryRewriter) ListBackups() ([]string, error) {

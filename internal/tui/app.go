@@ -1675,7 +1675,7 @@ func (m Model) handleBackupRestoreKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		backup := m.backups[m.backupIndex]
 		rewriter := gitops.NewHistoryRewriter(m.repo)
-		if err := rewriter.RestoreFromBackup(backup); err != nil {
+		if _, err := rewriter.RestoreFromBackup(backup); err != nil {
 			m.revertStatus = fmt.Sprintf("Restore failed: %v", err)
 		} else {
 			m.revertStatus = "Restored " + backup

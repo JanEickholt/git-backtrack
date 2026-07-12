@@ -28,9 +28,6 @@ func (hr *HistoryRewriter) ApplyChanges(changes []ForgeChange) (*RewriteResult, 
 		ChangedRefs: make(map[plumbing.Hash]plumbing.Hash),
 	}
 
-	signingConfig, _ := hr.repo.GetSigningConfig()
-	useSigning := signingConfig != nil && signingConfig.SignCommits
-
 	hashMap := make(map[plumbing.Hash]plumbing.Hash)
 	changeMap := make(map[plumbing.Hash]ForgeChange)
 	for _, change := range changes {
@@ -83,7 +80,8 @@ func (hr *HistoryRewriter) ApplyChanges(changes []ForgeChange) (*RewriteResult, 
 
 		newHash = newCommit.Hash
 
-		if useSigning {
+		shouldSign, _, _ := hr.repo.ShouldSignForAuthor(newCommit.Author.Email)
+		if shouldSign {
 			commitAuthorEmail := newCommit.Author.Email
 			signedHash, err := hr.repo.SignCommitForAuthor(newHash, commitAuthorEmail)
 			if err != nil {

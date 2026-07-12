@@ -512,6 +512,28 @@ func (r *Repository) SignCommitForAuthor(commitHash plumbing.Hash, authorEmail s
 	return r.SignCommit(commitHash)
 }
 
+// ShouldSignForAuthor reports whether a commit authored by authorEmail should
+// be signed, and returns the signing config to use. Signing is enabled when
+// either the global commit.gpgsign setting is on, or a per-email GPG/SSH key
+// is configured for the author's email.
+func (r *Repository) ShouldSignForAuthor(authorEmail string) (bool, *SigningConfig, error) {
+	signingConfig, err := r.GetSigningConfig()
+	if err != nil {
+		return false, nil, err
+	}
+	if signingConfig.SignCommits {
+		return true, signingConfig, nil
+	}
+	emailConfig, err := r.GetSigningConfigForEmail(authorEmail)
+	if err != nil {
+		return false, nil, err
+	}
+	if emailConfig.SigningKey != "" || emailConfig.PrivateKey != "" {
+		return true, emailConfig, nil
+	}
+	return false, nil, nil
+}
+
 func (r *Repository) signCommitGPG(commitHash plumbing.Hash, signingConfig *SigningConfig) (plumbing.Hash, error) {
 	commit, err := r.repo.CommitObject(commitHash)
 	if err != nil {

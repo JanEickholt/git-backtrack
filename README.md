@@ -44,6 +44,8 @@ git-backtrack auth get --email alice@example.com --show-tokens
 
 Global Git config is used by default (`--global` is accepted for compatibility). Add `--local` to store entries only in the current repository. The TUI Settings screen also includes an Auth keys submenu for editing GitHub token, GitLab token, and importing a GPG private key per email. The key material is stored encoded, not encrypted, in Git config; auth output shows only the derived fingerprint/status. During rewrites, a configured per-email GPG private key overrides the default `user.signingkey` when signing commits for that email.
 
+Rewrites now sign commits automatically when a per-email GPG (or SSH) key is configured for the commit author's email, even if global `commit.gpgsign` is not set to `true`. Commits authored by emails without a configured key remain unsigned unless `commit.gpgsign=true` is set globally. This keeps the no-sign default while letting opted-in accounts produce signed history without extra flags.
+
 After applying rewrites in the TUI, the result screen lists configured accounts with GitHub or GitLab tokens so you can push the rewritten branch directly instead of pushing manually.
 
 ## JSON Tool Mode
@@ -55,6 +57,32 @@ git-backtrack help --json
 git-backtrack list --path . --json
 git-backtrack validate --path . --plan plan.json --json
 git-backtrack apply --path . --plan plan.json --json --yes
+git-backtrack backups --path . --json
+git-backtrack restore --path . --json --yes --backup 20250101-120000
+```
+
+Add `--compact` to any JSON command to emit the response on a single line with no indentation (useful when piping into `jq -c` or another agent):
+
+```sh
+git-backtrack help --json --compact
+git-backtrack list --path . --json --compact
+```
+
+`backups` lists every `refs/backtrack-backup/<timestamp>` prefix in the repository:
+
+```json
+{
+  "ok": true,
+  "backups": [
+    {"name": "20250101-120000", "ref": "refs/backtrack-backup/20250101-120000", "created_at": "2025-01-01T12:00:00Z"}
+  ]
+}
+```
+
+`restore` re-points branch refs from a backup. It requires `--yes`. Without `--backup`, the latest backup is chosen. `--backup` accepts a bare name (`20250101-120000`), the full prefix ref (`refs/backtrack-backup/20250101-120000`), or a ref with branch suffix (`refs/backtrack-backup/20250101-120000/main`). Pass `--ref main` to check out a branch after restoring.
+
+```sh
+git-backtrack restore --path . --json --yes --backup 20250101-120000 --ref main
 ```
 
 Plans require an expected head so stale rewrites are rejected:
@@ -85,35 +113,13 @@ Plans require an expected head so stale rewrites are rejected:
 
 Hashes may be full 40-character hashes or unambiguous hex prefixes of at least 7 characters.
 
-## MCP Server
+### Warnings
 
-Run `git-backtrack` as an MCP stdio server when an AI client supports MCP tools:
+`validate` and `apply` responses may include informational `warnings` entries. Warnings never block the rewrite — they surface potential mistakes the caller should review.
 
-```sh
-git-backtrack mcp
-```
-
-Example client configuration:
-
-```json
-{
-  "mcpServers": {
-    "git-backtrack": {
-      "command": "/path/to/git-backtrack",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-The MCP server exposes these tools:
-
-- `git_backtrack_help`
-- `git_backtrack_list`
-- `git_backtrack_validate`
-- `git_backtrack_apply`
-
-`validate` and `apply` accept either an inline `plan` object or a `plan_path`. `apply` requires `yes: true`.
+- `date_before_parent` — an edited `author_date` is earlier than the parent commit's `author_date`.
+- `date_after_child` — an edited `author_date` is later than a child commit's `author_date`.
+- `empty_edit` — an `edit` operation did not change any fields.
 
 ## Safety
 
