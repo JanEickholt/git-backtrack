@@ -251,7 +251,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.applyLineStats(msg.stats)
-		return m, loadLineStatsBatchCmd(m.repo, m.currentBranch, m.commits, msg.next)
+		return m, loadLineStatsBatchCmd(m.repo, m.currentBranch, m.commits, m.firstUnloadedLineDiffIndex())
 
 	case tea.KeyMsg:
 		switch m.state {
@@ -1175,6 +1175,7 @@ func (m *Model) ensureGraphLoaded() error {
 	if graph == nil {
 		graph = &gitops.Graph{}
 	}
+	preserveLineStats(commits, m.commits)
 	m.commits = commits
 	m.authorHistory = commits
 	m.graph = graph
@@ -1709,6 +1710,7 @@ func (m *Model) refresh() tea.Cmd {
 	if graph == nil {
 		graph = &gitops.Graph{}
 	}
+	preserveLineStats(commits, m.commits)
 	m.commits = commits
 	m.authorHistory = commits
 	m.graph = graph
@@ -1754,6 +1756,28 @@ func (m *Model) applyLineStats(stats map[string]gitops.CommitStats) {
 		m.commits[i].StatsLoaded = true
 	}
 	m.list.SetItems(commitListItems(m.commits))
+}
+
+func preserveLineStats(commits []gitops.CommitInfo, loaded []gitops.CommitInfo) {
+	if len(commits) == 0 || len(loaded) == 0 {
+		return
+	}
+	statsByHash := make(map[string]gitops.CommitStats, len(loaded))
+	for _, commit := range loaded {
+		if !commit.StatsLoaded {
+			continue
+		}
+		statsByHash[commit.Hash.String()] = gitops.CommitStats{Additions: commit.Additions, Deletions: commit.Deletions}
+	}
+	for i := range commits {
+		stat, ok := statsByHash[commits[i].Hash.String()]
+		if !ok {
+			continue
+		}
+		commits[i].Additions = stat.Additions
+		commits[i].Deletions = stat.Deletions
+		commits[i].StatsLoaded = true
+	}
 }
 
 func commitListItems(commits []gitops.CommitInfo) []list.Item {

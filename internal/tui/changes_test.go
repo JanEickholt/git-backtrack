@@ -31,6 +31,28 @@ func TestSetChangeReplacesExistingChange(t *testing.T) {
 	}
 }
 
+func TestPreserveLineStatsCopiesLoadedStats(t *testing.T) {
+	loadedHash := plumbing.NewHash("1111111111111111111111111111111111111111")
+	missingHash := plumbing.NewHash("2222222222222222222222222222222222222222")
+	commits := []gitops.CommitInfo{
+		{Hash: loadedHash, ShortHash: "1111111"},
+		{Hash: missingHash, ShortHash: "2222222"},
+	}
+	loaded := []gitops.CommitInfo{
+		{Hash: loadedHash, Additions: 10, Deletions: 3, StatsLoaded: true},
+		{Hash: missingHash, Additions: 4, Deletions: 2},
+	}
+
+	preserveLineStats(commits, loaded)
+
+	if commits[0].Additions != 10 || commits[0].Deletions != 3 || !commits[0].StatsLoaded {
+		t.Fatalf("loaded stats = +%d -%d loaded=%v, want +10 -3 true", commits[0].Additions, commits[0].Deletions, commits[0].StatsLoaded)
+	}
+	if commits[1].StatsLoaded || commits[1].Additions != 0 || commits[1].Deletions != 0 {
+		t.Fatalf("missing stats = +%d -%d loaded=%v, want +0 -0 false", commits[1].Additions, commits[1].Deletions, commits[1].StatsLoaded)
+	}
+}
+
 func TestHandleListKeyCtrlArrowsMoveByPage(t *testing.T) {
 	items := make([]list.Item, 20)
 	commits := make([]gitops.CommitInfo, 20)
